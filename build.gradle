@@ -1,0 +1,97 @@
+// build.gradle
+plugins {
+    id 'java'
+    id 'application'
+}
+
+group = 'com.example'
+version = '1.0-SNAPSHOT'
+
+// Change ici si tu cibles une autre version de Java
+java {
+    sourceCompatibility = JavaVersion.VERSION_17
+    targetCompatibility = JavaVersion.VERSION_17
+}
+
+// Nom de ta classe contenant main()
+application {
+    mainClass = 'engine.Main'
+    applicationDefaultJvmArgs = ["-XstartOnFirstThread"]
+}
+
+sourceSets {
+    main {
+        java {
+            // exclude everything under engine/menu
+            exclude 'engine/menu/**'
+        }
+    }
+    test{
+        java{
+            srcDirs = [] // ne compile pas les tests
+        }
+    }
+}
+
+repositories {
+    mavenCentral()
+}
+
+ext {
+    lwjglVersion = '3.3.1'
+    jomlVersion  = '1.10.5'
+}
+
+// Détection du classifier natif en fonction de l'OS
+def osName = System.getProperty("os.name").toLowerCase()
+def osArch = System.getProperty("os.arch").toLowerCase()
+
+def nativeClassifier = ''
+if (osName.contains('windows')) {
+    nativeClassifier = 'natives-windows'
+} else if (osName.contains('mac')) {
+    // Sur Mac, choisissez arm64 ou x64 selon l'arch
+    nativeClassifier = osArch.contains('aarch64')
+            ? 'natives-macos-arm64'
+            : 'natives-macos'
+} else {
+    nativeClassifier = 'natives-linux'
+}
+
+dependencies {
+    // LWJGL modules
+    implementation "org.lwjgl:lwjgl:${lwjglVersion}"
+    implementation "org.lwjgl:lwjgl-glfw:${lwjglVersion}"
+    implementation "org.lwjgl:lwjgl-opengl:${lwjglVersion}"
+    implementation "org.lwjgl:lwjgl-stb:${lwjglVersion}"
+
+    // Natives pour la plateforme courante
+    runtimeOnly "org.lwjgl:lwjgl:${lwjglVersion}:${nativeClassifier}"
+    runtimeOnly "org.lwjgl:lwjgl-glfw:${lwjglVersion}:${nativeClassifier}"
+    runtimeOnly "org.lwjgl:lwjgl-opengl:${lwjglVersion}:${nativeClassifier}"
+    runtimeOnly "org.lwjgl:lwjgl-stb:${lwjglVersion}:${nativeClassifier}"
+
+    // JOML pour les matrices et vecteurs
+    implementation "org.joml:joml:${jomlVersion}"
+
+    // JUnit 5 pour les tests
+    testImplementation 'org.junit.jupiter:junit-jupiter:5.9.2'
+}
+
+test {
+    useJUnitPlatform()
+    testLogging {
+        events "passed", "skipped", "failed"
+    }
+}
+
+// Optionnel : génère un Fat-JAR incluant toutes les dépendances
+jar {
+    manifest {
+        attributes 'Main-Class': application.mainClass
+    }
+    from {
+        configurations.runtimeClasspath.collect { it.isDirectory() ? it : zipTree(it) }
+    }
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+}
