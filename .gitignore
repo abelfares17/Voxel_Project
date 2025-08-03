@@ -1,0 +1,40 @@
+# === Java ===
+*.class
+*.jar
+*.war
+*.ear
+
+# === Gradle ===
+.gradle/
+build/
+out/
+
+# === IntelliJ IDEA ===
+.idea/
+*.iml
+*.iws
+*.ipr
+
+# === Systèmes d’exploitation ===
+.DS_Store       # macOS
+Thumbs.db       # Windows
+
+# === Sauvegardes, logs, caches ===
+*.log
+*.tmp
+*.bak
+
+# === Fichiers personnels / monde généré ===
+save/
+
+# === Textures ou ressources temporaires ===
+*.png
+*.jpg
+*.jpeg
+*.psd
+*.blend1
+*.obj
+*.mtl
+
+# === Fichiers de test ou expérimentaux ===
+test/
