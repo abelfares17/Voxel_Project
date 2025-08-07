@@ -1,6 +1,7 @@
-package engine.render;
+package engine.menu;
 
 import engine.input.Input;
+import engine.render.TextRenderer;
 
 import static org.lwjgl.opengl.GL11.*;
 

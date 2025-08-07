@@ -7,7 +7,7 @@ import engine.input.Input;
 import engine.render.TextRenderer;
 import engine.render.UIScreenScaler;
 import engine.world.World;
-import engine.render.Button;
+
 import static org.lwjgl.opengl.GL11.*;
 
 import java.util.Random;

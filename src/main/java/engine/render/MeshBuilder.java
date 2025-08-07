@@ -3,6 +3,7 @@ package engine.render;
 
 import engine.world.Block;
 import engine.world.Chunk;
+import engine.world.World;
 import org.lwjgl.system.MemoryUtil;
 
 import java.io.FileWriter;
@@ -26,9 +27,29 @@ public class MeshBuilder {
     private static final int NOR_SIZE   = 3; // nx,ny,nz
     private static final int STRIDE     = (POS_SIZE + TEX_SIZE + NOR_SIZE) * FLOAT_SIZE;
 
-    public static void buildChunkMesh(Chunk chunk) {
+
+    // (Pas d'import OpenGL ici !)
+    public static MeshData generateMeshData(Chunk chunk, World world) {
+        //System.out.println("[MeshBuilder] Start mesh for chunk: " + chunk.getChunkX() + "," + chunk.getChunkZ());
+        List<Quad> quads = generateVisibleQuads(chunk, world);
+        int vertexCount = quads.size() * 6;
+        FloatBuffer fb = org.lwjgl.system.MemoryUtil.memAllocFloat(vertexCount * 8);
+        for (Quad q : quads) {
+            putVertex(fb, q.v0);
+            putVertex(fb, q.v1);
+            putVertex(fb, q.v2);
+            putVertex(fb, q.v2);
+            putVertex(fb, q.v3);
+            putVertex(fb, q.v0);
+        }
+        fb.flip();
+        //System.out.println("[MeshBuilder] End mesh for chunk: " + chunk.getChunkX() + "," + chunk.getChunkZ());
+        return new MeshData(fb, vertexCount, chunk);
+    }
+
+    public static void buildChunkMesh(Chunk chunk, World world) {
         chunk.cleanup();
-        List<Quad> quads = generateVisibleQuads(chunk);
+        List<Quad> quads = generateVisibleQuads(chunk, world);
         int vertexCount  = quads.size() * 6; // 2 triangles par quad
 
         FloatBuffer fb = MemoryUtil.memAllocFloat(vertexCount * (POS_SIZE + TEX_SIZE + NOR_SIZE));
@@ -43,32 +64,6 @@ public class MeshBuilder {
             putVertex(fb, q.v0);
         }
         fb.flip();
-        /*
-        // *** Écriture dans un fichier texte ***
-        if (chunk.getChunkX() == -1 && chunk.getChunkZ() == -1) { // ou un autre chunk de référence
-            try (FileWriter writer = new FileWriter("chunk-1_-1_vertices.txt")) {
-                int stride = POS_SIZE + TEX_SIZE + NOR_SIZE;
-                for (int i = 0; i < vertexCount; i++) {
-                    float x = fb.get(i * stride);
-                    float y = fb.get(i * stride + 1);
-                    float z = fb.get(i * stride + 2);
-                    float u = fb.get(i * stride + 3);
-                    float v = fb.get(i * stride + 4);
-                    float nx = fb.get(i * stride + 5);
-                    float ny = fb.get(i * stride + 6);
-                    float nz = fb.get(i * stride + 7);
-                    writer.write(String.format(
-                            "V%d: pos=(%.2f, %.2f, %.2f) uv=(%.2f, %.2f) norm=(%.2f, %.2f, %.2f)%n",
-                            i, x, y, z, u, v, nx, ny, nz
-                    ));
-                }
-                //System.out.println("[DEBUG] Vertices du chunk (0,0) écrits dans chunk0_0_vertices.txt");
-            } catch (IOException e) {
-                e.printStackTrace();
-            }
-            fb.rewind(); // Important de revenir au début après la lecture
-        }
-         */
 
         int vao = glGenVertexArrays();
         glBindVertexArray(vao);
@@ -100,7 +95,7 @@ public class MeshBuilder {
 
     public static void renderChunk(Chunk chunk) {
         if (!chunk.isReady()) {
-            System.out.println("Chunk PAS prêt ! vao=" + chunk.getVao() + " vbo=" + chunk.getVbo() + " count=" + chunk.getVertexCount() + " dirty=" + chunk.isMeshDirty());
+            System.out.println("[MeshBuilder/RenderChunk] Chunk " + chunk.getChunkX() + " , " + chunk.getChunkZ() + ", PAS prêt ! vao=" + chunk.getVao() + " vbo=" + chunk.getVbo() + " count=" + chunk.getVertexCount() + " dirty=" + chunk.isMeshDirty());
             return;
         }
         glBindVertexArray(chunk.getVao());
@@ -128,7 +123,7 @@ public class MeshBuilder {
             Vertex v0, Vertex v1, Vertex v2, Vertex v3
     ) {}
 
-    private static List<Quad> generateVisibleQuads(Chunk chunk) {
+    private static List<Quad> generateVisibleQuads(Chunk chunk, World world) {
         List<Quad> mesh = new ArrayList<>();
         final int[][] DIRS = {
                 { 0,  1,  0}, // TOP
@@ -158,8 +153,18 @@ public class MeshBuilder {
                         int ny = by + DIRS[f][1];
                         int nz = bz + DIRS[f][2];
 
-                        boolean visible = !chunk.inBounds(nx, ny, nz)
-                                || chunk.getBlockId(nx, ny, nz) == 0;
+                        boolean visible;
+                        if (chunk.inBounds(nx, ny, nz)) {
+                            // Bloc dans ce chunk
+                            visible = chunk.getBlockId(nx, ny, nz) == 0;
+                        } else {
+                            // Bloc hors du chunk courant, on doit aller chercher dans le monde
+                            int wx = chunk.getChunkX() * Chunk.WIDTH + nx;
+                            int wy = ny;
+                            int wz = chunk.getChunkZ() * Chunk.DEPTH + nz;
+                            visible = world.getBlockAt(wx, wy, wz).getId() == 0;
+                        }
+
                         if (!visible) continue;
 
                         float[] norm = NORMALS[f];
@@ -168,7 +173,6 @@ public class MeshBuilder {
                             case 1 -> block.getBottomTexture();
                             default -> block.getSideTexture();
                         };
-                        //System.out.printf("bx=%d by=%d bz=%d f=%d\n", bx, by, bz, f);
                         mesh.add(generateQuad(bx, by, bz, f, tex, norm));
                     }
                 }

@@ -1,17 +1,24 @@
 #version 150
-
-in vec2 vTexCoord;
 in vec3 vNormal;
-
+in vec2 vTexCoord;
 uniform sampler2D textureSampler;
+uniform vec3 sunDir;
+uniform vec3 sunColor;
+uniform float ambient;
 out vec4 fragColor;
 
 void main() {
+    vec3 color = texture(textureSampler, vTexCoord).rgb;
+    float lambert = max(dot(normalize(vNormal), normalize(sunDir)), 0.0);
+    vec3 lighting = color * (ambient + lambert * sunColor);
+    fragColor = vec4(lighting, 1.0);
+}
+
+/*
+void main() {
     // Couleur de base depuis la texture
     vec4 texColor = texture(textureSampler, vTexCoord);
-    /*
     fragColor = texColor;
-    */
     // Largeur de la grille (en fraction d'une tuile, ex : 0.04 = 4% de la tuile)
     float gridWidth = 0.005;
 
@@ -30,3 +37,4 @@ void main() {
     }
 
 }
+*/

@@ -16,6 +16,7 @@ public class Player {
     private boolean spectatorMode = true;
 
     // Constantes physiques
+    private static final float SPEED = 1.0f;
     private static final float WIDTH = 0.6f;
     public static final float HEIGHT = 2f;
     private static final float GRAVITY = -0.04f;
@@ -39,7 +40,7 @@ public class Player {
         pitch = Math.max(-89f, Math.min(89f, pitch));
 
         if (spectatorMode) {
-            float speed = 0.05f;
+            float speed = SPEED;
             // Monter/Descendre
             if (input.jump) vy += 1.0f;
             // Ajoute cette condition pour shift/crouch
@@ -110,7 +111,7 @@ public class Player {
 
     /** Déplacement relatif à la caméra (WASD/ZQSD, Yaw) */
     private void handleInput(Input input, World world) {
-        float speed = 0.10f; // Ajuste à ton goût
+        float speed = SPEED; // Ajuste à ton goût
 
         float rad = (float) Math.toRadians(yaw);
         float dirX = (float) Math.sin(rad);

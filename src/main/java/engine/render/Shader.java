@@ -83,6 +83,10 @@ public class Shader {
         glDeleteProgram(programId);
     }
 
+    public int getId() {
+        return programId;
+    }
+
     /*---------------------------
       Méthodes pour envoyer des uniformes
      ---------------------------*/

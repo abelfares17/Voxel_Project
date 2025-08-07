@@ -3,7 +3,6 @@ package engine.menu;
 import engine.Main;
 import engine.input.Input;
 import engine.render.TextRenderer;
-import engine.render.Button;
 import engine.render.UIScreenScaler;
 
 import static org.lwjgl.glfw.GLFW.*;

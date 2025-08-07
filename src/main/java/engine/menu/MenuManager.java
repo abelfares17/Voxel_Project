@@ -2,7 +2,6 @@ package engine.menu;
 
 import engine.Main;
 import engine.input.Input;
-import engine.render.Button;
 import engine.render.TextRenderer;
 import engine.render.UIScreenScaler;
 

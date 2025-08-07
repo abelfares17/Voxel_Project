@@ -105,6 +105,10 @@ public class Chunk {
         return meshDirty;
     }
 
+    public void setMeshDirty(boolean meshDirty) {
+        this.meshDirty = meshDirty;
+    }
+
     /** Indique si un VAO/VBO a déjà été généré et peut être rendu. */
     public boolean isReady() {
         return (vao != 0) && (vbo != 0) && (vertexCount > 0) && (!meshDirty);
