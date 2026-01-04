@@ -16,14 +16,19 @@ public class Chunk {
 
     private final int chunkX, chunkZ;
     private final short[][][] blocks = new short[WIDTH][HEIGHT][DEPTH];
+    private volatile boolean[][][] shadowMask;
 
     // VAO/VBO + vertexCount pour le mesh interleavé
-    private int vao;
-    private int vbo;
-    private int vertexCount;
+    // Volatile for thread safety: written by worker threads, read by render thread
+    private volatile int vao;
+    private volatile int vbo;
+    private volatile int vertexCount;
 
     // true si le mesh doit être reconstruit avant d'être rendu
-    private boolean meshDirty = true;
+    private volatile boolean meshDirty = true;
+
+    // true si les données du chunk ont été modifiées et doivent être sauvegardées
+    private volatile boolean dataDirty = false;
 
     /**
      * Construit un chunk aux coordonnées de chunk (chunkX, chunkZ).
@@ -41,7 +46,16 @@ public class Chunk {
         this.vao = 0;
         this.vbo = 0;
         this.vertexCount = 0;
-        this.meshDirty = true;
+    }
+
+    // Getter
+    public boolean[][][] getShadowMask() {
+        return shadowMask;
+    }
+
+    // Setter
+    public void setShadowMask(boolean[][][] shadowMask) {
+        this.shadowMask = shadowMask;
     }
 
     /** Retourne l’ID du chunk en X */
@@ -98,6 +112,7 @@ public class Chunk {
         if (!inBounds(x, y, z)) return;
         blocks[x][y][z] = id;
         meshDirty = true;
+        dataDirty = true;  // Mark for save
     }
 
     /** Indique si le mesh doit être reconstruit avant rendu. */
@@ -107,6 +122,15 @@ public class Chunk {
 
     public void setMeshDirty(boolean meshDirty) {
         this.meshDirty = meshDirty;
+    }
+
+    /** Indique si les données du chunk ont été modifiées et doivent être sauvegardées. */
+    public boolean isDataDirty() {
+        return dataDirty;
+    }
+
+    public void setDataDirty(boolean dataDirty) {
+        this.dataDirty = dataDirty;
     }
 
     /** Indique si un VAO/VBO a déjà été généré et peut être rendu. */

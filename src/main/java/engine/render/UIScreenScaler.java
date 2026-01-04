@@ -69,12 +69,12 @@ public class UIScreenScaler {
     }
 
     /** Largeur du framebuffer, en pixels */
-    public float getWidth() {
+    public int getWidth() {
         return fbWidth;
     }
 
     /** Hauteur du framebuffer, en pixels */
-    public float getHeight() {
+    public int getHeight() {
         return fbHeight;
     }
 }

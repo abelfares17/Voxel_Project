@@ -7,6 +7,7 @@ import java.util.concurrent.*;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
+import static engine.render.MeshBuilder.STRIDE;
 import static org.lwjgl.opengl.GL15.*;
 import static org.lwjgl.opengl.GL20.*;
 import static org.lwjgl.opengl.GL30.*;
@@ -64,15 +65,25 @@ public class MeshWorkerManager {
             glBindBuffer(GL_ARRAY_BUFFER, vbo);
             glBufferData(GL_ARRAY_BUFFER, data.vertexBuffer, GL_STATIC_DRAW);
 
-            // Attrib position (location = 0)
+            // location = 0 : aPos
             glEnableVertexAttribArray(0);
-            glVertexAttribPointer(0, 3, GL_FLOAT, false, 8 * Float.BYTES, 0);
-            // Attrib texcoord (location = 1)
+            glVertexAttribPointer(0, 3, GL_FLOAT, false, STRIDE, 0L);
+
+            // location = 1 : aTex
             glEnableVertexAttribArray(1);
-            glVertexAttribPointer(1, 2, GL_FLOAT, false, 8 * Float.BYTES, 3 * Float.BYTES);
-            // Attrib normal (location = 2)
+            glVertexAttribPointer(1, 2, GL_FLOAT, false, STRIDE, (long)(3 * Float.BYTES));
+
+            // location = 2 : aNormal
             glEnableVertexAttribArray(2);
-            glVertexAttribPointer(2, 3, GL_FLOAT, false, 8 * Float.BYTES, 5 * Float.BYTES);
+            glVertexAttribPointer(2, 3, GL_FLOAT, false, STRIDE, (long)((3 + 2) * Float.BYTES));
+
+            // location = 3 : aLight
+            glEnableVertexAttribArray(3);
+            glVertexAttribPointer(3, 1, GL_FLOAT, false, STRIDE, (long)((3 + 2 + 3) * Float.BYTES));
+
+            // location = 4 : aAO
+            glEnableVertexAttribArray(4);
+            glVertexAttribPointer(4, 1, GL_FLOAT, false, STRIDE, (long)((3 + 2 + 3 + 1) * Float.BYTES));
 
             glBindVertexArray(0);
             glBindBuffer(GL_ARRAY_BUFFER, 0);

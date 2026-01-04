@@ -1,5 +1,6 @@
 package engine.render;
 
+import org.joml.Matrix4f;
 import org.lwjgl.system.MemoryStack;
 
 import java.io.IOException;
@@ -106,6 +107,11 @@ public class Shader {
         if (loc >= 0) glUniform3f(loc, vec.x, vec.y, vec.z);
     }
 
+    public void setUniform(String name, org.joml.Vector4f vec) {
+        int loc = glGetUniformLocation(programId, name);
+        if (loc >= 0) glUniform4f(loc, vec.x, vec.y, vec.z, vec.w);
+    }
+
     public void setUniform(String name, org.joml.Matrix4f mat) {
         int loc = glGetUniformLocation(programId, name);
         if (loc >= 0) {
@@ -114,6 +120,24 @@ public class Shader {
                 mat.get(fb);
                 glUniformMatrix4fv(loc, false, fb);
             }
+        }
+    }
+
+    public void setMat4(String name, Matrix4f matrix) {
+        try (MemoryStack stack = MemoryStack.stackPush()) {
+            FloatBuffer fb = stack.mallocFloat(16);
+            matrix.get(fb);
+            int loc = glGetUniformLocation(programId, name);
+            if (loc != -1) glUniformMatrix4fv(loc, false, fb);
+        }
+    }
+
+    public void setTexture(String name, int textureId, int unit) {
+        int loc = glGetUniformLocation(programId, name);
+        if (loc != -1) {
+            glActiveTexture(GL_TEXTURE0 + unit);
+            glBindTexture(GL_TEXTURE_2D, textureId);
+            glUniform1i(loc, unit);
         }
     }
 }

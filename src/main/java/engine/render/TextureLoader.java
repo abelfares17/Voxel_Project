@@ -11,6 +11,7 @@ import static org.lwjgl.opengl.GL12.*;
 import static org.lwjgl.opengl.GL30.glGenerateMipmap;
 import static org.lwjgl.stb.STBImage.*;
 import static org.lwjgl.opengl.GL11.*;
+import static org.lwjgl.opengl.GL30.*;
 
 public class TextureLoader {
     public static int loadTextureFromClasspath(String resourcePath) {
@@ -36,26 +37,33 @@ public class TextureLoader {
             IntBuffer channels = stack.mallocInt(1);
 
             stbi_set_flip_vertically_on_load(true);
-            image = stbi_load_from_memory(buf, w, h, channels, 4);
+            image = stbi_load_from_memory(buf, w, h, channels, 4); // Force RGBA
             if (image == null) {
                 throw new RuntimeException("Erreur chargement image : " + stbi_failure_reason());
             }
             width = w.get(0);
             height = h.get(0);
-            System.out.println("Chargement texture: " + resourcePath + " -> " + width + "x" + height);
+            int originalChannels = channels.get(0);
+            System.out.println("Chargement texture: " + resourcePath + " -> " + width + "x" + height + " (orig: " + originalChannels + " channels, forced to 4)");
+            int texId = glGenTextures();
+            glBindTexture(GL_TEXTURE_2D, texId);
+
+            // We forced 4 channels (RGBA) in stbi_load_from_memory, so always use RGBA format
+            int internalFormat = GL_SRGB8_ALPHA8;
+            int format = GL_RGBA;
+
+            // Upload texture data (single call, not duplicated)
+            glTexImage2D(GL_TEXTURE_2D, 0, internalFormat,
+                    width, height, 0,
+                    format, GL_UNSIGNED_BYTE, image);
+            //glGenerateMipmap(GL_TEXTURE_2D); //Pas possible à cause de OpenGL3.0
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+            stbi_image_free(image);
+            glBindTexture(GL_TEXTURE_2D, 0);
+            return texId;
         } catch (Exception e) {
             throw new RuntimeException(e);
         }
-
-        int texId = glGenTextures();
-        glBindTexture(GL_TEXTURE_2D, texId);
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, width, height,
-                0, GL_RGBA, GL_UNSIGNED_BYTE, image);
-        //glGenerateMipmap(GL_TEXTURE_2D); //Pas possible à cause de OpenGL3.0
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-        stbi_image_free(image);
-        glBindTexture(GL_TEXTURE_2D, 0);
-        return texId;
     }
 }

@@ -26,7 +26,7 @@ public class MainMenuScreen implements MenuScreen {
 
     @Override
     public void render(TextRenderer text) {
-        float s = 2f;
+        float s = scaler.getScale();
 
         // 2) coordonnées “points” pour centrer les éléments
         float ux = scaler.getCenterX();
@@ -39,7 +39,7 @@ public class MainMenuScreen implements MenuScreen {
 
         // 4) Titre centré
         text.drawCentered("VOXEL ENGINE",
-                ux, 300f, s);
+                ux, 300f, s, scaler.getWidth(), scaler.getHeight());
 
         // 5) Boutons : en points, juste offseté par 50 points
         btn.draw(

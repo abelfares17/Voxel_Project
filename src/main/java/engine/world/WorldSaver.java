@@ -1,6 +1,6 @@
 package engine.world;
 
-import engine.player.Player;
+import engine.entity.Player;
 import java.io.*;
 import java.nio.file.Files;
 import java.nio.file.Path;

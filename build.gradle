@@ -16,7 +16,11 @@ java {
 // Nom de ta classe contenant main()
 application {
     mainClass = 'engine.Main'
-    applicationDefaultJvmArgs = ["-XstartOnFirstThread"]
+    applicationDefaultJvmArgs = [
+            "-XstartOnFirstThread",
+            "-XX:NativeMemoryTracking=summary",
+            "-Xmx1G"
+    ]
 }
 
 sourceSets {
@@ -73,6 +77,9 @@ dependencies {
 
     // JOML pour les matrices et vecteurs
     implementation "org.joml:joml:${jomlVersion}"
+
+    // Gson pour la sérialisation JSON (world metadata)
+    implementation 'com.google.code.gson:gson:2.10.1'
 
     // JUnit 5 pour les tests
     testImplementation 'org.junit.jupiter:junit-jupiter:5.9.2'

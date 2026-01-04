@@ -1,86 +1,161 @@
 package engine.world;
 
-import java.util.HashMap;
-import java.util.Map;
+import java.util.*;
 
-import engine.input.Input;
-import engine.player.Player;
 import engine.render.MeshWorkerManager;
+import engine.render.Shader;
+import engine.time.TimeManager;
+import org.joml.Matrix4f;
+import org.joml.Vector3f;
 
-import java.util.ArrayList;
-import java.util.List;
+import static org.lwjgl.opengl.GL30.*;
 
 /**
- * Représente un monde entier, contenant des chunks et un joueur.
+ * Représente un monde entier, contenant des chunks.
+ * Player management has been moved to Game.java.
  */
 public class World {
     private final Map<ChunkPos, Chunk> chunks = new HashMap<>();
-    private final Player player;
     private final long seed;
-    private final WorldSaver saver;
+    private final WorldStorage storage;  // Replaced WorldSaver with WorldStorage
     private final int renderDistance;
     private final WorldGenerator worldGenerator;
     private final Mode mode;
     private final MeshWorkerManager meshManager;
+    private TimeManager timeManager;
+    private final String worldName;
 
     public enum Mode {
         FLAT, PERLIN
     }
 
-    public World(long seed, int renderDistance) {
-        this.mode = Mode.PERLIN;
+    public World(String worldName, long seed, Mode mode, int renderDistance, TimeManager timeManager) {
+        this.worldName = worldName;
+        this.timeManager = timeManager;
+        this.mode = mode;
         this.renderDistance = renderDistance;
         this.seed = seed;
-        this.saver = new WorldSaver("world_" + seed);
+        this.storage = new WorldStorage(worldName, seed, mode.toString());
         this.worldGenerator = new WorldGenerator(seed, this);
         this.meshManager = new MeshWorkerManager(this, Runtime.getRuntime().availableProcessors());
-        // Initialisation "temporaire" d'un joueur fictif à 0,0 pour le preload
-        Player fakePlayer = new Player(0.5f, 100, 0.5f); // y arbitraire ici
 
-        // -> PRÉCHARGEMENT COMPLET :
-        preloadInitialChunksAndWait(fakePlayer); // <-- à la place de preloadInitialChunks()
-
-        // Maintenant le joueur peut être correctement positionné
-        this.player = new Player(0.5f, getSpawnY() + 2f, 0.5f); // Position par défaut
-        saver.loadPlayer(player); // Tente de charger la position
+        // Note: No preload here - caller must call startAsyncChunkGeneration()
     }
 
-    public void preloadInitialChunksAndWait(Player player) {
-        // Génère tous les chunks dans la grille
+
+
+    public TimeManager getTimeManager() {
+        return timeManager;
+    }
+
+    public Vector3f getSunDir() {
+        return timeManager.getSunData().sunDir();
+    }
+
+    /**
+     * Preload initial chunks around a position.
+     *
+     * @param centerChunkX Center chunk X coordinate
+     * @param centerChunkZ Center chunk Z coordinate
+     */
+    public void preloadInitialChunks(int centerChunkX, int centerChunkZ) {
+        // Generate all chunks in the grid
         for (int dx = -renderDistance; dx <= renderDistance; dx++) {
             for (int dz = -renderDistance; dz <= renderDistance; dz++) {
-                ChunkPos pos = new ChunkPos(dx, dz);
+                ChunkPos pos = new ChunkPos(centerChunkX + dx, centerChunkZ + dz);
                 if (!chunks.containsKey(pos)) {
                     Chunk chunk = generateChunk(pos);
-                    chunks.put(pos, chunk);           // D’ABORD dans la map !
-                    meshManager.queueChunk(chunk);    // Ensuite seulement, queue
+                    chunks.put(pos, chunk);
+                    meshManager.queueChunk(chunk);
                     markNeighborsDirty(pos.x(), pos.z());
                 }
             }
         }
-        System.out.println("Tous les chunks sont générés");
+        System.out.println("All chunks generated");
 
-        // Attend que tous les meshes soient uploadés sur le GPU
-        while (!allVisibleChunksReady(player, renderDistance)) {
+        // Wait for all meshes to be uploaded to GPU
+        while (!allVisibleChunksReady(centerChunkX, centerChunkZ, renderDistance)) {
             meshManager.processMeshes();
-            meshManager.uploadMeshesIfAny(); // upload dans le thread principal !
+            meshManager.uploadMeshesIfAny();
             try {
-                Thread.sleep(2); // évite 100% CPU (2 ms de pause)
+                Thread.sleep(2);
             } catch (InterruptedException ignored) {}
-            //System.out.println("Toujours bloqué en préchargement");
         }
     }
 
-    public boolean allVisibleChunksReady(Player player, int radius) {
-        int cx = player.getChunkX();
-        int cz = player.getChunkZ();
+    /**
+     * Check if all visible chunks around a position are ready.
+     *
+     * @param centerChunkX Center chunk X
+     * @param centerChunkZ Center chunk Z
+     * @param radius       Chunk radius
+     * @return True if all chunks are ready
+     */
+    public boolean allVisibleChunksReady(int centerChunkX, int centerChunkZ, int radius) {
         for (int dx = -radius; dx <= radius; dx++) {
             for (int dz = -radius; dz <= radius; dz++) {
-                Chunk chunk = chunks.get(new ChunkPos(cx + dx, cz + dz));
+                Chunk chunk = chunks.get(new ChunkPos(centerChunkX + dx, centerChunkZ + dz));
                 if (chunk == null || !chunk.isReady()) return false;
             }
         }
         return true;
+    }
+
+    /**
+     * Start async chunk generation for initial world load.
+     * Non-blocking - call processChunkLoading() each frame to continue.
+     *
+     * @param centerChunkX Center X coordinate
+     * @param centerChunkZ Center Z coordinate
+     */
+    public void startAsyncChunkGeneration(int centerChunkX, int centerChunkZ) {
+        for (int dx = -renderDistance; dx <= renderDistance; dx++) {
+            for (int dz = -renderDistance; dz <= renderDistance; dz++) {
+                ChunkPos pos = new ChunkPos(centerChunkX + dx, centerChunkZ + dz);
+                if (!chunks.containsKey(pos)) {
+                    Chunk chunk = generateChunk(pos);
+                    chunks.put(pos, chunk);
+                    meshManager.queueChunk(chunk);
+                    markNeighborsDirty(pos.x(), pos.z());
+                }
+            }
+        }
+        System.out.println("All chunks queued for generation");
+    }
+
+    /**
+     * Process chunk loading for one frame.
+     * Call this repeatedly until isInitialLoadComplete() returns true.
+     */
+    public void processChunkLoading() {
+        meshManager.processMeshes();
+        meshManager.uploadMeshesIfAny();
+    }
+
+    /**
+     * Check if initial chunks are ready for rendering.
+     */
+    public boolean isInitialLoadComplete() {
+        return allVisibleChunksReady(0, 0, renderDistance);
+    }
+
+    /**
+     * Get loading progress (0.0 to 1.0).
+     */
+    public float getLoadingProgress() {
+        int totalChunks = (2 * renderDistance + 1) * (2 * renderDistance + 1);
+        int readyChunks = 0;
+
+        for (int dx = -renderDistance; dx <= renderDistance; dx++) {
+            for (int dz = -renderDistance; dz <= renderDistance; dz++) {
+                Chunk chunk = chunks.get(new ChunkPos(dx, dz));
+                if (chunk != null && chunk.isReady()) {
+                    readyChunks++;
+                }
+            }
+        }
+
+        return (float) readyChunks / totalChunks;
     }
 
     public int getSpawnY(){
@@ -130,15 +205,24 @@ public class World {
     }
 
     public Chunk generateChunk(ChunkPos pos) {
-        Chunk loaded = saver.loadChunk(pos.x(), pos.z());
-        if (loaded != null) return loaded;
+        // Try to load from disk first
+        Chunk loaded = storage.loadChunk(pos.x(), pos.z());
+        if (loaded != null) {
+            // Chunk was loaded from disk, it's clean
+            return loaded;
+        }
 
+        // If not on disk, generate new chunk
         Chunk generated = new Chunk(pos.x(), pos.z());
         if (mode == Mode.FLAT) {
             this.worldGenerator.generateFlat(generated);
         } else {
             this.worldGenerator.generatePerlin(generated);
         }
+
+        // Mark as needing save (newly generated)
+        generated.setDataDirty(true);
+
         // Ajout : Marquer les voisins pour remeshing
         markNeighborsDirty(pos.x(), pos.z());
         return generated;
@@ -157,37 +241,53 @@ public class World {
     }
 
     public void save() {
+        // Save all dirty chunks (modified data)
         for (Chunk chunk : chunks.values()) {
-            saver.saveChunk(chunk);
+            if (chunk.isDataDirty()) {
+                storage.saveChunkAsync(chunk);
+            }
         }
-        saver.savePlayer(player);
+
+        // Save metadata
+        storage.saveMetadata();
+
+        // Player saving is handled separately by Game.java
     }
 
-    public Player getPlayer() {
-        return player;
+    public WorldStorage getStorage() {
+        return storage;
     }
 
     public Map<ChunkPos, Chunk> getAllChunks() {
         return chunks;
     }
 
-    public void update(Input input) {
-        Chunk currentChunk = getChunk(player.getChunkX(), player.getChunkZ());
-        if (currentChunk != null) {
-            player.update(currentChunk, input, this);
-        }
-        updateVisibleChunks(player, renderDistance); // charger les nouveaux chunks si besoin
-        unloadFarChunks(player, renderDistance+2);     // Supprimer les chunk très lointains
+    /**
+     * Update world (process meshes, update chunks).
+     * Player update is handled separately in Game.java.
+     *
+     * @param playerChunkX Player chunk X coordinate
+     * @param playerChunkZ Player chunk Z coordinate
+     */
+    public void update(int playerChunkX, int playerChunkZ) {
+        updateVisibleChunks(playerChunkX, playerChunkZ, renderDistance);
+        unloadFarChunks(playerChunkX, playerChunkZ, renderDistance + 2);
         meshManager.processMeshes();
     }
 
-    public List<Chunk> getVisibleChunks(Player player, int radius) {
+    /**
+     * Get all visible chunks around a position.
+     *
+     * @param centerChunkX Center chunk X
+     * @param centerChunkZ Center chunk Z
+     * @param radius       Chunk radius
+     * @return List of visible chunks
+     */
+    public List<Chunk> getVisibleChunks(int centerChunkX, int centerChunkZ, int radius) {
         List<Chunk> list = new ArrayList<>();
-        int cx = player.getChunkX();
-        int cz = player.getChunkZ();
         for (int dx = -radius; dx <= radius; dx++) {
             for (int dz = -radius; dz <= radius; dz++) {
-                ChunkPos pos = new ChunkPos(cx + dx, cz + dz);
+                ChunkPos pos = new ChunkPos(centerChunkX + dx, centerChunkZ + dz);
                 Chunk chunk = chunks.get(pos);
                 if (chunk != null) {
                     list.add(chunk);
@@ -197,12 +297,17 @@ public class World {
         return list;
     }
 
-    private void updateVisibleChunks(Player player, int radius) {
-        int cx = player.getChunkX();
-        int cz = player.getChunkZ();
+    /**
+     * Update visible chunks around player position.
+     *
+     * @param centerChunkX Center chunk X
+     * @param centerChunkZ Center chunk Z
+     * @param radius       Chunk radius
+     */
+    private void updateVisibleChunks(int centerChunkX, int centerChunkZ, int radius) {
         for (int dx = -radius; dx <= radius; dx++) {
             for (int dz = -radius; dz <= radius; dz++) {
-                ChunkPos pos = new ChunkPos(cx + dx, cz + dz);
+                ChunkPos pos = new ChunkPos(centerChunkX + dx, centerChunkZ + dz);
                 if (!chunks.containsKey(pos)) {
                     Chunk chunk = generateChunk(pos);
                     chunks.put(pos, chunk);
@@ -212,20 +317,46 @@ public class World {
         }
     }
 
-    private void unloadFarChunks(Player player, int maxDistance) {
-        int cx = player.getChunkX();
-        int cz = player.getChunkZ();
-
+    /**
+     * Unload chunks that are too far from player.
+     *
+     * @param centerChunkX Center chunk X
+     * @param centerChunkZ Center chunk Z
+     * @param maxDistance  Maximum distance in chunks
+     */
+    private void unloadFarChunks(int centerChunkX, int centerChunkZ, int maxDistance) {
         chunks.entrySet().removeIf(entry -> {
             ChunkPos pos = entry.getKey();
-            int dx = Math.abs(pos.x() - cx);
-            int dz = Math.abs(pos.z() - cz);
+            int dx = Math.abs(pos.x() - centerChunkX);
+            int dz = Math.abs(pos.z() - centerChunkZ);
             boolean toRemove = dx > maxDistance || dz > maxDistance;
             if (toRemove) {
                 entry.getValue().cleanup();
             }
             return toRemove;
         });
+    }
+
+    public void renderDepth(Shader depthShader) {
+        for (Map.Entry<ChunkPos, Chunk> entry : chunks.entrySet()) {
+            ChunkPos pos = entry.getKey();
+            Chunk chunk = entry.getValue();
+
+            if (!chunk.isReady()) continue; // le mesh n’est pas encore prêt
+            int vao = chunk.getVao();
+            int vertexCount = chunk.getVertexCount();
+            if (vao == -1 || vertexCount == 0) continue;
+
+            int worldX = pos.getWorldX();
+            int worldZ = pos.getWorldZ();
+            Matrix4f modelMatrix = new Matrix4f().translate(worldX, 0, worldZ);
+            depthShader.setMat4("modelMatrix", modelMatrix);
+
+            glBindVertexArray(vao);
+            glDrawArrays(GL_TRIANGLES, 0, vertexCount);
+        }
+
+        glBindVertexArray(0);
     }
 
     private Chunk getOrGenerateChunk(int x, int z) {
@@ -239,6 +370,50 @@ public class World {
 
     public int getRenderDistance(){
         return renderDistance;
+    }
+
+    /**
+     * Load an existing world from disk.
+     * @param worldName World name
+     * @param renderDistance Render distance
+     * @param timeManager Time manager
+     * @return Loaded world, or null if world doesn't exist
+     */
+    public static World loadFromSave(String worldName, int renderDistance, TimeManager timeManager) {
+        WorldMetadata metadata = WorldStorage.loadMetadata(worldName);
+        if (metadata == null) {
+            System.err.println("World not found: " + worldName);
+            return null;
+        }
+
+        // Parse generation mode
+        Mode mode;
+        try {
+            mode = Mode.valueOf(metadata.mode);
+        } catch (IllegalArgumentException e) {
+            System.err.println("Unknown generation mode: " + metadata.mode);
+            mode = Mode.PERLIN;
+        }
+
+        // Create world with loaded metadata
+        World world = new World(worldName, metadata.seed, mode, renderDistance, timeManager);
+
+        System.out.println("Loaded world: " + worldName +
+                          " (seed=" + metadata.seed + ", mode=" + mode + ")");
+
+        return world;
+    }
+
+    /**
+     * Cleanup world resources.
+     * CRITICAL: Must be called when world is no longer needed to stop background threads.
+     */
+    public void cleanup() {
+        // Shutdown mesh generation threads
+        meshManager.shutdown();
+
+        // Shutdown storage executor
+        storage.shutdown();
     }
 
 }

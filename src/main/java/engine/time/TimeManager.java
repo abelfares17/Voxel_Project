@@ -1,5 +1,7 @@
 package engine.time;
 
+import org.joml.Vector3f;
+
 /**
  * Gère le temps in-game (ex: cycle jour/nuit)
  */
@@ -24,6 +26,17 @@ public class TimeManager {
             frames = 0;
             lastFpsTime = now;
         }
+    }
+
+    public SunData getSunData(){
+        float t = timeOfDay;
+        t = (t + 0.25f) % 1.0f;
+        float angle = (float) (2 * Math.PI * (t-0.25));
+        float sunY = (float) Math.sin(angle);
+        float sunX = (float) Math.cos(angle);
+        Vector3f sunDir = new Vector3f(sunX, sunY, 0.2f).normalize();
+        //System.out.println(angle);
+        return new SunData(sunDir, sunY);
     }
 
     public int getFps() {
