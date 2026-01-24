@@ -332,7 +332,7 @@ No contributions for now.
 
 ## 📄 License
 
-No license for now.
+MIT License.
 
 ## 🙏 Acknowledgments
 
