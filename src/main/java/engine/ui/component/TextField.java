@@ -6,7 +6,12 @@ import org.joml.Matrix4f;
 import org.joml.Vector3f;
 import org.joml.Vector4f;
 import static org.lwjgl.glfw.GLFW.GLFW_KEY_BACKSPACE;
+import static org.lwjgl.glfw.GLFW.GLFW_KEY_DELETE;
+import static org.lwjgl.glfw.GLFW.GLFW_KEY_END;
 import static org.lwjgl.glfw.GLFW.GLFW_KEY_ENTER;
+import static org.lwjgl.glfw.GLFW.GLFW_KEY_HOME;
+import static org.lwjgl.glfw.GLFW.GLFW_KEY_LEFT;
+import static org.lwjgl.glfw.GLFW.GLFW_KEY_RIGHT;
 
 import engine.input.Input;
 import engine.render.TextRenderer;
@@ -21,6 +26,7 @@ public class TextField implements UIComponent {
     private String placeholder = "";
     private boolean focused = false;
     private boolean visible = true;
+    private int caretPosition = 0;  // Caret index within text [0, text.length()]
 
     private final TextRenderer textRenderer;
     private final UIRenderer uiRenderer;
@@ -54,7 +60,7 @@ public class TextField implements UIComponent {
         if (!visible) return;
 
         // Render border with optional fill (transparent when not focused, slight brightening when focused)
-        Vector4f fillColor = focused ? focusFillColor : normalFillColor;
+        Vector4f fillColor = normalFillColor;
         Vector4f currentBorderColor = focused ? focusBorderColor : borderColor;
         uiRenderer.drawRectWithBorder(x, y, width, height, fillColor, currentBorderColor, borderWidth, orthoProjection);
 
@@ -62,14 +68,25 @@ public class TextField implements UIComponent {
         String displayText = text.isEmpty() ? placeholder : text;
         Vector3f displayColor = text.isEmpty() ? placeholderColor : textColor;
 
-        float textX = x + 10; // Padding
-        float textY = y + height - 12;
+        // Vertically center text within the TextField
+        float fontHeight = textRenderer.getFontHeight();
+        float textX = x + 10; // Horizontal padding
+        float textY = y + (height + fontHeight) / 2; // Centered baseline position
         textRenderer.drawText(displayText, textX, textY, displayColor, orthoProjection, windowHeight, scale);
 
-        // Render cursor if focused
+        // Render cursor if focused - MUST be drawn AFTER border to be visible
         if (focused) {
-            float cursorX = textX + text.length() * 12;
-            uiRenderer.drawRect(cursorX, textY, 2, 24, new Vector4f(1, 1, 1, 1), orthoProjection);
+            // Calculate cursor X position based on text BEFORE the caret
+            String textBeforeCaret = text.substring(0, Math.min(caretPosition, text.length()));
+            float caretX = textX + textRenderer.getTextWidth(textBeforeCaret, scale);
+
+            // Cursor starts at top of text area and extends to full font height
+            // Inset slightly to avoid overlap with border
+            float cursorHeight = fontHeight;
+            float cursorY = y + height/2 - cursorHeight * 0.8f;
+
+            // Draw caret with full opacity
+            uiRenderer.drawRect(caretX, cursorY, 3, cursorHeight, new Vector4f(1, 1, 1, 1), orthoProjection);
         }
     }
 
@@ -82,24 +99,60 @@ public class TextField implements UIComponent {
 
         // Focus on click
         if (input.isMouseClicked(0)) {
+            boolean wasFocused = focused;
             focused = contains(mouseX, mouseY);
+
+            // When gaining focus, move caret to end
+            if (focused && !wasFocused) {
+                caretPosition = text.length();
+                System.out.println("TextField clicked -> setting focus true");
+            }
         }
 
         // Handle text input if focused
         if (focused) {
-            // Get typed characters
+            // Get typed characters and insert at caret position
             List<Character> chars = input.consumeChars();
             for (char c : chars) {
-                text += c;
+                // Insert character at caret position
+                text = text.substring(0, caretPosition) + c + text.substring(caretPosition);
+                caretPosition++;  // Move caret forward
             }
 
-            // Handle backspace
-            if (input.isKeyPressed(GLFW_KEY_BACKSPACE) && !text.isEmpty()) {
-                text = text.substring(0, text.length() - 1);
+            // Handle backspace - delete character BEFORE caret
+            if (input.isKeyJustPressed(GLFW_KEY_BACKSPACE) && caretPosition > 0) {
+                text = text.substring(0, caretPosition - 1) + text.substring(caretPosition);
+                caretPosition--;  // Move caret back
             }
 
-            // Handle Enter to unfocus
-            if (input.isKeyPressed(GLFW_KEY_ENTER)) {
+            // Handle delete - delete character AT caret position
+            if (input.isKeyJustPressed(GLFW_KEY_DELETE) && caretPosition < text.length()) {
+                text = text.substring(0, caretPosition) + text.substring(caretPosition + 1);
+                // Caret stays at same position
+            }
+
+            // Handle left arrow - move caret left
+            if (input.isKeyJustPressed(GLFW_KEY_LEFT)) {
+                caretPosition = Math.max(0, caretPosition - 1);
+            }
+
+            // Handle right arrow - move caret right
+            if (input.isKeyJustPressed(GLFW_KEY_RIGHT)) {
+                caretPosition = Math.min(text.length(), caretPosition + 1);
+            }
+
+            // Handle Home - move caret to start
+            if (input.isKeyJustPressed(GLFW_KEY_HOME)) {
+                caretPosition = 0;
+            }
+
+            // Handle End - move caret to end
+            if (input.isKeyJustPressed(GLFW_KEY_END)) {
+                caretPosition = text.length();
+            }
+
+            // Handle Enter to unfocus - use isKeyJustPressed for single-frame action
+            if (input.isKeyJustPressed(GLFW_KEY_ENTER)) {
                 focused = false;
             }
         }
@@ -120,6 +173,10 @@ public class TextField implements UIComponent {
     @Override public void setVisible(boolean visible) { this.visible = visible; }
 
     public String getText() { return text; }
-    public void setText(String text) { this.text = text; }
+    public void setText(String text) {
+        this.text = text;
+        // Reset caret to end when text is changed externally
+        caretPosition = text.length();
+    }
     public boolean isFocused() { return focused; }
 }

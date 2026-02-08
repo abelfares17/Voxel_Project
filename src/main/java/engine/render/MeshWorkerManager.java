@@ -77,13 +77,9 @@ public class MeshWorkerManager {
             glEnableVertexAttribArray(2);
             glVertexAttribPointer(2, 3, GL_FLOAT, false, STRIDE, (long)((3 + 2) * Float.BYTES));
 
-            // location = 3 : aLight
+            // location = 3 : aAO (CPU shadow removed - GPU shadow mapping only)
             glEnableVertexAttribArray(3);
             glVertexAttribPointer(3, 1, GL_FLOAT, false, STRIDE, (long)((3 + 2 + 3) * Float.BYTES));
-
-            // location = 4 : aAO
-            glEnableVertexAttribArray(4);
-            glVertexAttribPointer(4, 1, GL_FLOAT, false, STRIDE, (long)((3 + 2 + 3 + 1) * Float.BYTES));
 
             glBindVertexArray(0);
             glBindBuffer(GL_ARRAY_BUFFER, 0);

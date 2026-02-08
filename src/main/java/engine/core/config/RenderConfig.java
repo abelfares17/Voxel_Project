@@ -82,13 +82,40 @@ public class RenderConfig {
     public static final float SUN_COLOR_BLUE_INTENSITY = 0.8f;
 
 
-    // === SHADOW MAPPING ===
+    // === SHADOW MAPPING (Legacy Single Shadow Map) ===
 
-    /** Shadow map width in pixels */
-    public static final int SHADOW_MAP_WIDTH = 3072;
+    /** Shadow map width in pixels (higher = sharper shadows, more VRAM) */
+    public static final int SHADOW_MAP_WIDTH = 4096;
 
-    /** Shadow map height in pixels */
-    public static final int SHADOW_MAP_HEIGHT = 2048;
+    /** Shadow map height in pixels (square for uniform quality) */
+    public static final int SHADOW_MAP_HEIGHT = 4096;
+
+
+    // === CASCADED SHADOW MAPPING (CSM) ===
+
+    /** Number of shadow cascades (2-6 supported, 3 is typical) */
+    public static final int CSM_CASCADE_COUNT = 3;
+
+    /** Shadow map resolution per cascade (square) */
+    public static final int CSM_SHADOW_MAP_SIZE = 2048;
+
+    /** Practical split lambda: 0 = linear, 1 = logarithmic, 0.75 = practical blend favoring near */
+    public static final float CSM_SPLIT_LAMBDA = 0.55f;
+
+    /** Depth margin ratio for shadow casters behind the view frustum (0.5 = 50% extension) */
+    public static final float CSM_DEPTH_MARGIN_RATIO = 0.5f;
+
+    /** Shadow far plane for CSM (shorter than camera far for better quality) */
+    public static final float CSM_SHADOW_FAR = 400.0f;
+
+    /** Light basis transition start (alignment with world up) */
+    public static final float CSM_LIGHT_BASIS_TRANSITION_START = 0.9f;
+
+    /** Light basis transition end (alignment with world up) */
+    public static final float CSM_LIGHT_BASIS_TRANSITION_END = 0.995f;
+
+    /** Base shadow bias (scales with cascade texel size) */
+    public static final float CSM_BASE_SHADOW_BIAS = 0.0005f;
 
 
     // === FOG CONFIGURATION ===

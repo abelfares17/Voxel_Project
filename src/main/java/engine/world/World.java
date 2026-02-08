@@ -368,6 +368,10 @@ public class World {
         return seed;
     }
 
+    public String getWorldName() {
+        return worldName;
+    }
+
     public int getRenderDistance(){
         return renderDistance;
     }

@@ -25,6 +25,12 @@ public class Input {
     private final List<Character> charBuffer = new ArrayList<>();
     private final boolean[] prevMouse = new boolean[GLFW_MOUSE_BUTTON_LAST];
     private final boolean[] currMouse = new boolean[GLFW_MOUSE_BUTTON_LAST];
+    // Keyboard state tracking for edge detection (just-pressed detection)
+    private final boolean[] prevKeys = new boolean[GLFW_KEY_LAST + 1];
+    private final boolean[] currKeys = new boolean[GLFW_KEY_LAST + 1];
+    // Mouse scroll tracking
+    private double scrollX = 0.0;
+    private double scrollY = 0.0;
 
 
     public Input(long window, UIScreenScaler scaler) {
@@ -37,6 +43,11 @@ public class Input {
             } catch (Exception e) {
                 e.printStackTrace();
             }
+        });
+        // Callback pour le scroll (molette / trackpad)
+        glfwSetScrollCallback(window, (win, xoffset, yoffset) -> {
+            scrollX += xoffset;
+            scrollY += yoffset;
         });
     }
 
@@ -58,9 +69,24 @@ public class Input {
         deltaX = x - lastX;
         deltaY = y - lastY;
         lastX = x; lastY = y;
+
+        // Update mouse button states
         for (int b = 0; b < currMouse.length; b++) {
             prevMouse[b] = currMouse[b];
             currMouse[b] = (glfwGetMouseButton(window, b) == GLFW_PRESS);
+        }
+
+        // Update keyboard states for commonly used keys (Backspace, Enter, etc.)
+        // We don't need to track all keys, just the ones used for UI input and special actions
+        int[] trackedKeys = {GLFW_KEY_BACKSPACE, GLFW_KEY_ENTER, GLFW_KEY_ESCAPE,
+                            GLFW_KEY_DELETE, GLFW_KEY_UP, GLFW_KEY_DOWN,
+                            GLFW_KEY_LEFT, GLFW_KEY_RIGHT, GLFW_KEY_HOME, GLFW_KEY_END,
+                            GLFW_KEY_F2, GLFW_KEY_F3, GLFW_KEY_F4, GLFW_KEY_F5, GLFW_KEY_F6,
+                            GLFW_KEY_F7, GLFW_KEY_F8, GLFW_KEY_F9, GLFW_KEY_F10,
+                            GLFW_KEY_F11, GLFW_KEY_F12};  // Debug keys
+        for (int key : trackedKeys) {
+            prevKeys[key] = currKeys[key];
+            currKeys[key] = (glfwGetKey(window, key) == GLFW_PRESS);
         }
     }
 
@@ -84,10 +110,31 @@ public class Input {
         return out;
     }
 
-    /** Teste si une touche est pressée (utile en menu) */
+    /** Récupère et consomme le scroll vertical (molette / trackpad) */
+    public float consumeScrollY() {
+        float result = (float) scrollY;
+        scrollY = 0.0;
+        return result;
+    }
+
+    /** Teste si une touche est pressée (utile en menu) - returns true while key is held */
     public boolean isKeyPressed(int key) {
         return glfwGetKey(window, key) == GLFW_PRESS;
     }
+
+    /**
+     * Teste si une touche vient d'être pressée ce frame (edge detection)
+     * Returns true only on the frame when the key transitions from released to pressed.
+     * This prevents key-repeat issues - perfect for single-action inputs like Backspace.
+     *
+     * @param key GLFW key code
+     * @return true if key was just pressed this frame
+     */
+    public boolean isKeyJustPressed(int key) {
+        if (key < 0 || key >= currKeys.length) return false;
+        return currKeys[key] && !prevKeys[key];
+    }
+
     /** Teste si un bouton de souris est pressé (0 = gauche, 1 = droit) */
     public boolean isMousePressed(int button) {
         return glfwGetMouseButton(window, button) == GLFW_PRESS;

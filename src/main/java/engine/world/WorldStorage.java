@@ -1,12 +1,17 @@
 package engine.world;
 
-import engine.entity.Player;
-import java.io.*;
+import java.io.DataInputStream;
+import java.io.DataOutputStream;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
+import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.LocalDateTime;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+
+import engine.entity.Player;
 
 /**
  * Modern world storage system replacing WorldSaver.
@@ -106,8 +111,7 @@ public class WorldStorage {
             byte[] data = Files.readAllBytes(file);
             return ChunkCompressor.decompress(chunkX, chunkZ, data);
         } catch (IOException e) {
-            System.err.println("Failed to load chunk (" + chunkX + ", " +
-                chunkZ + "): " + e.getMessage());
+            //System.err.println("Failed to load chunk (" + chunkX + ", " + chunkZ + "): " + e.getMessage());
             return null;
         }
     }

@@ -75,7 +75,7 @@ TOB_Voxel_Project/
 │   │   ├── render/            # Rendering systems
 │   │   │   ├── camera/        # Camera implementation
 │   │   │   ├── core/          # RenderContext, RenderManager
-│   │   │   ├── renderer/      # VoxelRenderer, ShadowMapRenderer
+│   │   │   ├── renderer/      # VoxelRenderer, ShadowRenderer
 │   │   │   ├── Shader.java
 │   │   │   ├── TextRenderer.java
 │   │   │   ├── TextureLoader.java

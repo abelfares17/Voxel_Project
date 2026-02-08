@@ -13,11 +13,16 @@ public class TimeManager {
     private long lastFpsTime = System.currentTimeMillis();
     private int currentFps = 0;
 
+    // Debug: pause sun/time progression
+    private boolean paused = false;
+
 
     public void update(long deltaMillis) {
         //System.out.println("deltaMillis = " + deltaMillis); // DEBUG
-        timeOfDay += deltaMillis * SPEED;
-        if (timeOfDay > 1.0f) timeOfDay -= 1.0f;
+        if (!paused) {
+            timeOfDay += deltaMillis * SPEED;
+            if (timeOfDay > 1.0f) timeOfDay -= 1.0f;
+        }
         // FPS tracking
         frames++;
         long now = System.currentTimeMillis();
@@ -28,15 +33,32 @@ public class TimeManager {
         }
     }
 
+    /**
+     * Get raw sun data with continuous (unfiltered) sun direction.
+     * Use this for lighting, sky rendering, and visual effects.
+     */
     public SunData getSunData(){
         float t = timeOfDay;
         t = (t + 0.25f) % 1.0f;
-        float angle = (float) (2 * Math.PI * (t-0.25));
+        float angle = (float) (2 * Math.PI * (t - 0.25));
+
+        // Continuous sun direction (no quantization - smooth motion)
         float sunY = (float) Math.sin(angle);
         float sunX = (float) Math.cos(angle);
         Vector3f sunDir = new Vector3f(sunX, sunY, 0.2f).normalize();
-        //System.out.println(angle);
         return new SunData(sunDir, sunY);
+    }
+
+    /**
+     * Get sun direction for shadow mapping.
+     * Returns the raw sun direction - shadow stability is handled by
+     * texel-aligned projection in ShadowRenderer.
+     *
+     * @param deltaTime Time since last frame in seconds (unused, kept for API compatibility)
+     * @return Sun direction for shadow calculations
+     */
+    public Vector3f getSunDirForShadows(float deltaTime) {
+        return getSunData().sunDir();
     }
 
     public int getFps() {
@@ -77,5 +99,17 @@ public class TimeManager {
 
     public float getSunAngleRadians() {
         return (float)(Math.PI * timeOfDay); // soleil 0 (est) → pi (ouest)
+    }
+
+    /**
+     * Toggle time/sun pause for debugging.
+     * When paused, timeOfDay stops updating so sun direction remains constant.
+     */
+    public void togglePause() {
+        paused = !paused;
+    }
+
+    public boolean isPaused() {
+        return paused;
     }
 }

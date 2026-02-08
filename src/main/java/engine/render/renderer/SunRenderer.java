@@ -98,14 +98,18 @@ public class SunRenderer implements Renderer {
         shader.setUniform("projectionMatrix", context.getCamera().getProjectionMatrix());
         shader.setUniform("uColor", sunColor);
 
-        // Render sun quad
+        // Render sun quad with isolated GL state
         glBindVertexArray(vao);
         glDisable(GL_DEPTH_TEST); // Sun is "infinite", shouldn't be occluded
+        glDisable(GL_CULL_FACE);  // Sun quad may be visible from both sides
         glEnable(GL_BLEND);
         glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
         glDrawArrays(GL_TRIANGLE_FAN, 0, 4);
+
+        // Restore state to known-good defaults for next pass
         glDisable(GL_BLEND);
         glEnable(GL_DEPTH_TEST);
+        // Don't manage culling here - let VoxelRenderer handle its own culling state
         glBindVertexArray(0);
 
         shader.unbind();

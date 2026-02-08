@@ -9,6 +9,7 @@ import org.joml.Matrix4f;
 import org.joml.Vector3f;
 import org.lwjgl.BufferUtils;
 import static org.lwjgl.opengl.GL11.GL_BLEND;
+import static org.lwjgl.opengl.GL11.GL_CULL_FACE;
 import static org.lwjgl.opengl.GL11.GL_DEPTH_TEST;
 import static org.lwjgl.opengl.GL11.GL_FLOAT;
 import static org.lwjgl.opengl.GL11.GL_LINEAR;
@@ -147,6 +148,7 @@ public class TextRenderer {
         shader.setUniform("uFontTex", 0);
 
         glDisable(GL_DEPTH_TEST);
+        glDisable(GL_CULL_FACE);  // Disable culling for 2D UI
         glEnable(GL_BLEND);
         glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 
@@ -157,6 +159,7 @@ public class TextRenderer {
 
         glEnable(GL_DEPTH_TEST);
         glDisable(GL_BLEND);
+        // Don't re-enable culling - let next render pass manage its own state
     }
 
     public void cleanup() {

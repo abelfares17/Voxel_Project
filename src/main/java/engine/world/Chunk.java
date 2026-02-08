@@ -1,7 +1,6 @@
 // src/main/java/engine/world/Chunk.java
 package engine.world;
 
-import engine.render.MeshBuilder;
 import java.util.Arrays;
 
 /**
@@ -16,7 +15,6 @@ public class Chunk {
 
     private final int chunkX, chunkZ;
     private final short[][][] blocks = new short[WIDTH][HEIGHT][DEPTH];
-    private volatile boolean[][][] shadowMask;
 
     // VAO/VBO + vertexCount pour le mesh interleavé
     // Volatile for thread safety: written by worker threads, read by render thread
@@ -48,17 +46,7 @@ public class Chunk {
         this.vertexCount = 0;
     }
 
-    // Getter
-    public boolean[][][] getShadowMask() {
-        return shadowMask;
-    }
-
-    // Setter
-    public void setShadowMask(boolean[][][] shadowMask) {
-        this.shadowMask = shadowMask;
-    }
-
-    /** Retourne l’ID du chunk en X */
+    /** Retourne l'ID du chunk en X */
     public int getChunkX() {
         return chunkX;
     }

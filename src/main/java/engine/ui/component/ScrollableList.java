@@ -129,6 +129,39 @@ public class ScrollableList<T> implements UIComponent {
             itemRenderer.render(item, x, itemY, width, itemHeight,
                               isSelected, isHovered, orthoProjection, windowHeight);
         }
+
+        // Render scrollbar if list has more items than visible
+        if (items.size() > maxVisibleItems) {
+            renderScrollbar(orthoProjection, maxVisibleItems);
+        }
+    }
+
+    /**
+     * Render a scrollbar indicator on the right side of the list.
+     */
+    private void renderScrollbar(Matrix4f orthoProjection, int maxVisibleItems) {
+        float scrollbarWidth = 6.0f;
+        float scrollbarX = x + width - scrollbarWidth - borderWidth;
+
+        // Scrollbar track (background)
+        Vector4f trackColor = new Vector4f(0.2f, 0.2f, 0.2f, 0.5f);
+        uiRenderer.drawRect(scrollbarX, y + borderWidth, scrollbarWidth, height - 2 * borderWidth,
+                           trackColor, orthoProjection);
+
+        // Calculate scrollbar thumb dimensions
+        float totalItems = items.size();
+        float visibleRatio = maxVisibleItems / totalItems;
+        float thumbHeight = Math.max(20, (height - 2 * borderWidth) * visibleRatio);
+
+        // Calculate scrollbar thumb position
+        float scrollRange = height - 2 * borderWidth - thumbHeight;
+        float scrollPercent = (totalItems > maxVisibleItems) ? scrollOffset / (totalItems - maxVisibleItems) : 0;
+        float thumbY = y + borderWidth + (scrollRange * scrollPercent);
+
+        // Scrollbar thumb (draggable part)
+        Vector4f thumbColor = new Vector4f(0.6f, 0.6f, 0.6f, 0.9f);
+        uiRenderer.drawRect(scrollbarX, thumbY, scrollbarWidth, thumbHeight,
+                           thumbColor, orthoProjection);
     }
 
     @Override
@@ -151,15 +184,28 @@ public class ScrollableList<T> implements UIComponent {
             if (input.isMouseClicked(0) && hoveredIndex != -1) {
                 selectedIndex = hoveredIndex;
             }
+
+            // Handle mouse wheel / trackpad scrolling
+            float scrollDelta = input.consumeScrollY();
+            if (scrollDelta != 0) {
+                // Negative delta = scroll down, positive = scroll up
+                // Scroll by 1 item per scroll notch
+                scrollOffset -= (int) Math.signum(scrollDelta);
+
+                // Clamp scroll offset
+                int maxVisibleItems = (int) (height / itemHeight);
+                int maxScroll = Math.max(0, items.size() - maxVisibleItems);
+                scrollOffset = Math.max(0, Math.min(maxScroll, scrollOffset));
+            }
         }
 
-        // Keyboard navigation
-        if (input.isKeyPressed(GLFW_KEY_UP)) {
+        // Keyboard navigation - use isKeyJustPressed for single-step scrolling
+        if (input.isKeyJustPressed(GLFW_KEY_UP)) {
             if (selectedIndex > 0) {
                 selectedIndex--;
                 scrollToSelection();
             }
-        } else if (input.isKeyPressed(GLFW_KEY_DOWN)) {
+        } else if (input.isKeyJustPressed(GLFW_KEY_DOWN)) {
             if (selectedIndex < items.size() - 1) {
                 selectedIndex++;
                 scrollToSelection();

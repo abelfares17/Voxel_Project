@@ -29,11 +29,9 @@ public class Shader {
         glBindAttribLocation(programId, 0, "aPos");
         glBindAttribLocation(programId, 1, "aTex");
         glBindAttribLocation(programId, 2, "aNormal");
+        glBindAttribLocation(programId, 3, "aAO");
 
         glLinkProgram(programId);
-        System.out.println("aPos: " + glGetAttribLocation(programId, "aPos"));
-        System.out.println("aTex: " + glGetAttribLocation(programId, "aTex"));
-        System.out.println("aNormal: " + glGetAttribLocation(programId, "aNormal"));
         if (glGetProgrami(programId, GL_LINK_STATUS) == GL_FALSE) {
             String log = glGetProgramInfoLog(programId);
             throw new RuntimeException("Shader linking failed:\n" + log);
@@ -102,6 +100,11 @@ public class Shader {
         if (loc >= 0) glUniform1f(loc, value);
     }
 
+    public void setUniform(String name, org.joml.Vector2f vec) {
+        int loc = glGetUniformLocation(programId, name);
+        if (loc >= 0) glUniform2f(loc, vec.x, vec.y);
+    }
+
     public void setUniform(String name, org.joml.Vector3f vec) {
         int loc = glGetUniformLocation(programId, name);
         if (loc >= 0) glUniform3f(loc, vec.x, vec.y, vec.z);
@@ -137,6 +140,55 @@ public class Shader {
         if (loc != -1) {
             glActiveTexture(GL_TEXTURE0 + unit);
             glBindTexture(GL_TEXTURE_2D, textureId);
+            glUniform1i(loc, unit);
+        }
+    }
+
+    /*---------------------------
+      CSM Array Uniform Methods
+     ---------------------------*/
+
+    /**
+     * Set a uniform array of mat4 matrices.
+     * Each matrix is uploaded to name[0], name[1], etc.
+     */
+    public void setUniformMat4Array(String name, Matrix4f[] matrices) {
+        try (MemoryStack stack = MemoryStack.stackPush()) {
+            FloatBuffer fb = stack.mallocFloat(16);
+            for (int i = 0; i < matrices.length; i++) {
+                int loc = glGetUniformLocation(programId, name + "[" + i + "]");
+                if (loc != -1) {
+                    matrices[i].get(fb);
+                    fb.rewind();
+                    glUniformMatrix4fv(loc, false, fb);
+                }
+            }
+        }
+    }
+
+    /**
+     * Set a uniform array of floats.
+     * The entire array is uploaded at once.
+     */
+    public void setUniformFloatArray(String name, float[] values) {
+        int loc = glGetUniformLocation(programId, name);
+        if (loc != -1) {
+            try (MemoryStack stack = MemoryStack.stackPush()) {
+                FloatBuffer fb = stack.mallocFloat(values.length);
+                fb.put(values).flip();
+                glUniform1fv(loc, fb);
+            }
+        }
+    }
+
+    /**
+     * Bind a 2D texture array to a texture unit.
+     */
+    public void setTextureArray(String name, int textureArrayId, int unit) {
+        int loc = glGetUniformLocation(programId, name);
+        if (loc != -1) {
+            glActiveTexture(GL_TEXTURE0 + unit);
+            glBindTexture(GL_TEXTURE_2D_ARRAY, textureArrayId);
             glUniform1i(loc, unit);
         }
     }

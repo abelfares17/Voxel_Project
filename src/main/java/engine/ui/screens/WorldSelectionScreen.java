@@ -13,6 +13,7 @@ import java.util.stream.Stream;
 import org.joml.Matrix4f;
 import org.joml.Vector3f;
 import org.joml.Vector4f;
+import static org.lwjgl.opengl.GL11.glDeleteTextures;
 
 import engine.core.Application;
 import engine.core.states.LoadingState;
@@ -27,8 +28,6 @@ import engine.ui.component.Label;
 import engine.ui.component.ScrollableList;
 import engine.world.WorldMetadata;
 import engine.world.WorldStorage;
-
-import static org.lwjgl.opengl.GL11.glDeleteTextures;
 
 /**
  * World selection screen - Browse and load saved worlds.
@@ -94,11 +93,12 @@ public class WorldSelectionScreen implements Screen {
 
     private void initComponents() {
         int centerX = app.getWindowWidth() / 2;
+        int centerY = app.getWindowHeight() / 2;
         int windowHeight = app.getWindowHeight();
 
         // Title (using high-resolution title font)
         titleLabel = new Label(
-            centerX - 150, 50,
+            centerX, centerY - 800,
             "Select World",
             new Vector3f(1, 1, 1),
             1.0f,
@@ -110,29 +110,29 @@ public class WorldSelectionScreen implements Screen {
             100, 150,                    // x, y
             app.getWindowWidth() - 200,  // width
             windowHeight - 350,          // height
-            300,                          // item height
+            80,                          // item height (reduced for better layout)
             uiRenderer
         );
 
         // Set custom item renderer
         worldList.setItemRenderer((item, x, y, width, height, selected, hovered,
                                    orthoProjection, winHeight) -> {
-            // Render world name (large, white)
-            textRenderer.drawText(item.worldName, x + 10, y + 10,
+            // Vertically center text within item height
+            float fontHeight = textRenderer.getFontHeight();
+            float baselineY = y + (height + fontHeight) / 2;
+
+            // Render world name (left side)
+            textRenderer.drawText(item.worldName, x + 15, baselineY,
                                 new Vector3f(1, 1, 1),
                                 orthoProjection, winHeight, 1.0f);
 
-            // Render last played date (small, gray, right-aligned)
+            // Render last played date (right side, smaller)
             DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm");
             String dateStr = item.lastPlayedDate.format(formatter);
-            textRenderer.drawText(dateStr, x + width - 200, y + 10,
+            float dateWidth = textRenderer.getTextWidth(dateStr, 0.8f);
+            textRenderer.drawText(dateStr, x + width - dateWidth - 15, baselineY,
                                 new Vector3f(0.7f, 0.7f, 0.7f),
                                 orthoProjection, winHeight, 0.8f);
-
-            // Render mode indicator (small, green)
-            textRenderer.drawText(item.mode, x + 10, y + 35,
-                                new Vector3f(0.5f, 0.8f, 0.5f),
-                                orthoProjection, winHeight, 0.7f);
         });
 
         // Empty message label (hidden by default)

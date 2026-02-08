@@ -5,6 +5,7 @@ import java.util.Random;
 import org.joml.Matrix4f;
 import org.joml.Vector3f;
 import org.joml.Vector4f;
+import static org.lwjgl.opengl.GL11.glDeleteTextures;
 
 import engine.core.Application;
 import engine.core.states.LoadingState;
@@ -19,8 +20,6 @@ import engine.ui.component.Label;
 import engine.ui.component.TextField;
 import engine.world.World;
 import engine.world.WorldNaming;
-
-import static org.lwjgl.opengl.GL11.glDeleteTextures;
 
 /**
  * World creation screen - Create new worlds with custom name and seed.
@@ -58,11 +57,12 @@ public class WorldCreationScreen implements Screen {
 
     private void initComponents() {
         int centerX = app.getWindowWidth() / 2;
+        int centerY = app.getWindowHeight() / 2;
         int windowHeight = app.getWindowHeight();
 
         // Title (using high-resolution title font)
         titleLabel = new Label(
-            centerX - 180, 50,
+            centerX, centerY - 800,
             "Create New World",
             new Vector3f(1, 1, 1),
             1.0f,
@@ -71,23 +71,23 @@ public class WorldCreationScreen implements Screen {
 
         // World Name section
         nameLabel = new Label(
-            200, 200,
+            centerX, centerY - 600,
             "World Name:",
             new Vector3f(1, 1, 1),
-            1.2f,
+            3f,
             textRenderer
         );
 
         nameField = new TextField(
-            200, 250,
-            600, 50,
+            centerX - 300, centerY - 500,
+            600, 100,
             "Enter world name...",
             textRenderer, uiRenderer
         );
 
         // Seed section
         seedLabel = new Label(
-            200, 350,
+            centerX, centerY - 300,
             "Seed (optional):",
             new Vector3f(1, 1, 1),
             1.2f,
@@ -95,15 +95,15 @@ public class WorldCreationScreen implements Screen {
         );
 
         seedField = new TextField(
-            200, 400,
-            600, 50,
+            centerX - 300, centerY - 200,
+            600, 100,
             "Random seed",
             textRenderer, uiRenderer
         );
 
         // Mode label (informational only - always PERLIN for Phase 9)
         modeLabel = new Label(
-            200, 500,
+            centerX, centerY - 50,
             "Generation Mode: PERLIN",
             new Vector3f(0.7f, 0.7f, 0.7f),
             1.0f,
