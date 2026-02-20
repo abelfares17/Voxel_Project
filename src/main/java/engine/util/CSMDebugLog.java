@@ -29,7 +29,7 @@ public class CSMDebugLog {
             String timestamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss"));
             Path logFile = logsDir.resolve("csm_debug_" + timestamp + ".jsonl");
             writer = new PrintWriter(new BufferedWriter(new FileWriter(logFile.toFile())));
-            System.out.println("[CSMDebugLog] Writing to: " + logFile.toAbsolutePath());
+            // Silent startup - log file path is in logs/ directory
         } catch (IOException e) {
             System.err.println("[CSMDebugLog] Failed to create log file: " + e.getMessage());
             enabled = false;
@@ -102,7 +102,7 @@ public class CSMDebugLog {
         writer.flush();
     }
 
-    // ALERTS - always logged, bypass rate limit
+    // ALERTS - always logged to file, bypass rate limit
     public void alertHalfSize(int cascade, float halfSize, float sphereRadius) {
         if (!enabled) return;
         float overPercent = 100f * (halfSize / sphereRadius - 1f);
@@ -110,8 +110,6 @@ public class CSMDebugLog {
                 "\"cascade\":%d,\"halfSize\":%.4f,\"sphereRadius\":%.4f,\"overPercent\":%.2f}%n",
             System.currentTimeMillis(), frameCounter, cascade, halfSize, sphereRadius, overPercent);
         writer.flush();
-        System.out.printf("[ALERT:HALFSIZE] Cascade %d: halfSize=%.4f > sphere=%.4f (+%.2f%%)%n",
-            cascade, halfSize, sphereRadius, overPercent);
     }
 
     public void alertTexelSize(int cascade, float cached, float computed) {
@@ -121,8 +119,6 @@ public class CSMDebugLog {
                 "\"cascade\":%d,\"cached\":%.6f,\"computed\":%.6f,\"driftPercent\":%.2f}%n",
             System.currentTimeMillis(), frameCounter, cascade, cached, computed, driftPercent);
         writer.flush();
-        System.out.printf("[ALERT:TEXELSIZE] Cascade %d: cached=%.6f computed=%.6f (drift %.2f%%)%n",
-            cascade, cached, computed, driftPercent);
     }
 
     public void alertBasisDrift(float yaw, float distance) {
@@ -131,7 +127,6 @@ public class CSMDebugLog {
                 "\"yaw\":%.2f,\"distance\":%.6f}%n",
             System.currentTimeMillis(), frameCounter, yaw, distance);
         writer.flush();
-        System.out.printf("[ALERT:BASIS_DRIFT] yaw=%.2f distance=%.6f%n", yaw, distance);
     }
 
     public void close() {

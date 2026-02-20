@@ -36,6 +36,13 @@ public class RenderConfig {
     /** Day sky color (RGB) */
     public static final Vector3f SKY_COLOR_DAY = new Vector3f(0.53f, 0.81f, 0.92f);
 
+    /**
+     * When true, sky color is frozen to SKY_COLOR_DAY instead of evolving with time.
+     * This is a workaround for visual flashes during shadow map transitions.
+     * Toggle with K key.
+     */
+    private static boolean freezeSkyColor = false;
+
 
     // === TIME THRESHOLDS (0.0 to 1.0 range, where 0.0 = 6:00 AM) ===
 
@@ -232,11 +239,17 @@ public class RenderConfig {
 
     /**
      * Calculate sky color based on time of day.
+     * If freezeSkyColor is enabled, always returns SKY_COLOR_DAY.
      *
      * @param timeOfDay Normalized time (0.0 to 1.0, where 0.0 = 6:00 AM)
      * @return Sky color for the given time
      */
     public static Vector3f getSkyColor(float timeOfDay) {
+        // When frozen, always return day sky color (workaround for shadow transition flashes)
+        if (freezeSkyColor) {
+            return new Vector3f(SKY_COLOR_DAY);
+        }
+
         // Normalize to 0-1 range with 6AM offset
         float t = (timeOfDay + 0.25f) % 1.0f;
 
@@ -266,6 +279,29 @@ public class RenderConfig {
             // 8:00 PM - 4:00 AM: Night
             return new Vector3f(SKY_COLOR_NIGHT);
         }
+    }
+
+    /**
+     * Toggle sky color freeze mode.
+     * When frozen, sky is always day color (workaround for shadow transition flashes).
+     */
+    public static void toggleFreezeSkyColor() {
+        freezeSkyColor = !freezeSkyColor;
+        System.out.println("Sky Color: " + (freezeSkyColor ? "FROZEN (day)" : "DYNAMIC"));
+    }
+
+    /**
+     * Check if sky color is frozen.
+     */
+    public static boolean isFreezeSkyColor() {
+        return freezeSkyColor;
+    }
+
+    /**
+     * Set sky color freeze state.
+     */
+    public static void setFreezeSkyColor(boolean freeze) {
+        freezeSkyColor = freeze;
     }
 
     /**

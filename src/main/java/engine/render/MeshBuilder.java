@@ -6,10 +6,8 @@ import java.util.ArrayList;
 import java.util.List;
 
 import static org.lwjgl.opengl.GL11.GL_FLOAT;
-import static org.lwjgl.opengl.GL11.GL_NO_ERROR;
 import static org.lwjgl.opengl.GL11.GL_TRIANGLES;
 import static org.lwjgl.opengl.GL11.glDrawArrays;
-import static org.lwjgl.opengl.GL11.glGetError;
 import static org.lwjgl.opengl.GL15.GL_ARRAY_BUFFER;
 import static org.lwjgl.opengl.GL15.GL_STATIC_DRAW;
 import static org.lwjgl.opengl.GL15.glBindBuffer;
@@ -37,10 +35,6 @@ public class MeshBuilder {
     private static final int AO_SIZE    = 1;
     // CPU shadow (LIGHT_SIZE) removed - GPU shadow mapping only
     public static final int STRIDE = (POS_SIZE + TEX_SIZE + NOR_SIZE + AO_SIZE) * FLOAT_SIZE;
-
-
-
-    // (Pas d'import OpenGL ici !)
     public static MeshData generateMeshData(Chunk chunk, World world) {
         List<Quad> quads = generateVisibleQuads(chunk, world);
         int vertexCount = quads.size() * 6;
@@ -112,16 +106,11 @@ public class MeshBuilder {
 
     public static void renderChunk(Chunk chunk) {
         if (!chunk.isReady()) {
-            //System.out.println("[MeshBuilder/RenderChunk] Chunk " + chunk.getChunkX() + " , " + chunk.getChunkZ() + ", PAS prêt ! vao=" + chunk.getVao() + " vbo=" + chunk.getVbo() + " count=" + chunk.getVertexCount() + " dirty=" + chunk.isMeshDirty());
             return;
         }
         glBindVertexArray(chunk.getVao());
-        //System.out.println("VAO: " + chunk.getVao() + " VBO: " + chunk.getVbo() + " count: " + chunk.getVertexCount());
         glDrawArrays(GL_TRIANGLES, 0, chunk.getVertexCount());
-        //glDrawArrays(GL_POINTS, 0, chunk.getVertexCount());
         glBindVertexArray(0);
-        int err = glGetError();
-        if (err != GL_NO_ERROR) System.out.println("OpenGL ERROR: " + err);
     }
 
     private static void putVertex(FloatBuffer fb, Vertex v) {

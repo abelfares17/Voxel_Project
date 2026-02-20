@@ -11,12 +11,15 @@ uniform mat4 modelMatrix;
 
 // CSM: Use constant for max cascades, actual count from uniform
 const int MAX_CASCADES = 4;
-uniform mat4 lightSpaceMatrices[MAX_CASCADES];
+uniform mat4 lightSpaceMatrices[MAX_CASCADES];    // Primary light-space matrices
+uniform mat4 lightSpaceMatricesB[MAX_CASCADES];   // Secondary matrices (for leapfrog crossfade)
 uniform int cascadeCount;
+uniform int leapfrogActive;  // 1 if transitioning between shadow maps
 
 // Normal-offset shadow parameters
 uniform vec3 sunDir;  // Direction TO the sun (for normal offset calculation)
 uniform float cascadeTexelSizes[MAX_CASCADES];  // For scaling normal offset per cascade
+uniform float cascadeTexelSizesB[MAX_CASCADES]; // Secondary texel sizes (for leapfrog)
 uniform int normalOffsetMode;  // 0=off, 1=on (for A/B testing)
 
 out vec2 vTexCoord;
@@ -26,7 +29,8 @@ out float vAO;
 
 // CSM outputs
 out float vViewDepth;
-out vec4 vLightSpacePos[MAX_CASCADES];
+out vec4 vLightSpacePos[MAX_CASCADES];   // Primary light-space positions
+out vec4 vLightSpacePosB[MAX_CASCADES];  // Secondary light-space positions (for leapfrog)
 
 void main() {
     vec4 world = modelMatrix * vec4(aPos, 1.0);
@@ -45,6 +49,7 @@ void main() {
     for (int i = 0; i < MAX_CASCADES; i++) {
         if (i < cascadeCount) {
             vec4 shadowWorld = world;
+            vec4 shadowWorldB = world;
 
             if (normalOffsetMode == 1) {
                 // Normal-offset shadow technique:
@@ -62,13 +67,32 @@ void main() {
                 float offsetScale = 1.0;  // Tunable multiplier
                 float offset = cascadeTexelSizes[i] * offsetScale * sinTheta;
 
-                // Apply offset along normal
+                // Apply offset along normal (primary)
                 shadowWorld = vec4(world.xyz + worldNormal * offset, 1.0);
+
+                // Apply offset for secondary (use secondary texel sizes if leapfrog active)
+                if (leapfrogActive == 1) {
+                    float offsetB = cascadeTexelSizesB[i] * offsetScale * sinTheta;
+                    shadowWorldB = vec4(world.xyz + worldNormal * offsetB, 1.0);
+                }
             }
 
             vLightSpacePos[i] = lightSpaceMatrices[i] * shadowWorld;
+
+            // Compute secondary light-space position for leapfrog
+            // CRITICAL: Always compute VALID B values to ensure consistent GPU state
+            // When NOT transitioning, use A's matrices for B to ensure valid w component
+            // This prevents undefined behavior from w=0 division in fragment shader
+            // and maintains consistent varying interpolation across all frames
+            if (leapfrogActive == 1) {
+                vLightSpacePosB[i] = lightSpaceMatricesB[i] * shadowWorldB;
+            } else {
+                // Use A's computation for B - ensures w is valid and GPU state is invariant
+                vLightSpacePosB[i] = lightSpaceMatrices[i] * shadowWorld;
+            }
         } else {
             vLightSpacePos[i] = vec4(0.0);
+            vLightSpacePosB[i] = vec4(0.0);
         }
     }
 

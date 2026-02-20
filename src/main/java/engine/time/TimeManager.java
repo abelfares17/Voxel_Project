@@ -7,7 +7,11 @@ import org.joml.Vector3f;
  */
 public class TimeManager {
     private float timeOfDay; // entre 0.0 (minuit) et 1.0 (prochain minuit)
-    private static final float SPEED = 1f / 600000f; // 1 cycle complet = 60 sec
+    private static final float BASE_SPEED = 1f / 600000f; // 1 cycle complet = 60 sec
+
+    // Debug: time speed multiplier (1.0 = normal, 0.1 = 10x slower, 10.0 = 10x faster)
+    private float debugSpeedMultiplier = 1.0f;  // Default: normal speed
+
     // Ajout pour FPS
     private int frames = 0;
     private long lastFpsTime = System.currentTimeMillis();
@@ -20,7 +24,7 @@ public class TimeManager {
     public void update(long deltaMillis) {
         //System.out.println("deltaMillis = " + deltaMillis); // DEBUG
         if (!paused) {
-            timeOfDay += deltaMillis * SPEED;
+            timeOfDay += deltaMillis * BASE_SPEED * debugSpeedMultiplier;
             if (timeOfDay > 1.0f) timeOfDay -= 1.0f;
         }
         // FPS tracking
@@ -111,5 +115,21 @@ public class TimeManager {
 
     public boolean isPaused() {
         return paused;
+    }
+
+    /**
+     * Get debug time speed multiplier.
+     * 1.0 = normal, 0.1 = 10x slower, 10.0 = 10x faster
+     */
+    public float getDebugSpeedMultiplier() {
+        return debugSpeedMultiplier;
+    }
+
+    /**
+     * Set debug time speed multiplier for CSM debugging.
+     * @param multiplier 1.0 = normal, 0.1 = 10x slower, 10.0 = 10x faster
+     */
+    public void setDebugSpeedMultiplier(float multiplier) {
+        this.debugSpeedMultiplier = multiplier;
     }
 }

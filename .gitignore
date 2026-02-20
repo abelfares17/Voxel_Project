@@ -28,7 +28,6 @@ Thumbs.db       # Windows
 saves/
 
 # === Textures ou ressources temporaires ===
-*.png
 *.jpg
 *.jpeg
 *.psd
@@ -39,3 +38,4 @@ saves/
 # === Fichiers de test ou expérimentaux ===
 test/
 saves/
+captures/

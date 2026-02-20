@@ -83,7 +83,9 @@ public class Input {
                             GLFW_KEY_LEFT, GLFW_KEY_RIGHT, GLFW_KEY_HOME, GLFW_KEY_END,
                             GLFW_KEY_F2, GLFW_KEY_F3, GLFW_KEY_F4, GLFW_KEY_F5, GLFW_KEY_F6,
                             GLFW_KEY_F7, GLFW_KEY_F8, GLFW_KEY_F9, GLFW_KEY_F10,
-                            GLFW_KEY_F11, GLFW_KEY_F12};  // Debug keys
+                            GLFW_KEY_F11, GLFW_KEY_F12,  // Debug keys
+                            GLFW_KEY_0, GLFW_KEY_9,  // Number keys for slow motion
+                            GLFW_KEY_J, GLFW_KEY_K, GLFW_KEY_L, GLFW_KEY_M, GLFW_KEY_P};  // Toggle keys
         for (int key : trackedKeys) {
             prevKeys[key] = currKeys[key];
             currKeys[key] = (glfwGetKey(window, key) == GLFW_PRESS);

@@ -61,18 +61,6 @@ public class CSMCalculator {
     private boolean zRangeCaptured = false;
 
     // ═══════════════════════════════════════════════════════════════════════════
-    // LOGGING STATE (for delta tracking)
-    // ═══════════════════════════════════════════════════════════════════════════
-
-    private final Vector3f prevLightDir = new Vector3f();
-    private final Vector3f prevLightRight = new Vector3f();
-    private final Vector3f prevLightUp = new Vector3f();
-    private float prevSnappedX = 0;
-    private float prevSnappedY = 0;
-    private long lastDetailedLogTime = 0;
-    private static final long DETAILED_LOG_INTERVAL_MS = 500;
-
-    // ═══════════════════════════════════════════════════════════════════════════
     // TEMPORARY STORAGE
     // ═══════════════════════════════════════════════════════════════════════════
 
@@ -194,67 +182,144 @@ public class CSMCalculator {
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
-    // LIGHT BASIS UPDATE - STABLE VERSION
+    // LIGHT BASIS UPDATE - PIXAR/DUFF WITH QUANTIZATION
     // ═══════════════════════════════════════════════════════════════════════════
 
+    // Quantization state for leapfrogging
+    private final Vector3f lastQuantizedSunDir = new Vector3f(0, 1, 0);
+    private boolean quantizedBasisInitialized = false;
+
+    // Quantization threshold: only update basis when sun moves more than this angle (radians)
+    // 0.5 degrees ≈ 0.00873 radians
+    private static final float SUN_QUANTIZATION_THRESHOLD = 0.00873f;
+
     /**
-     * Update light basis vectors from sun direction using a STABLE method.
+     * Check if the sun direction has changed enough to warrant a basis update.
+     * Used by leapfrogging system to decide when to render to the secondary shadow map.
      *
-     * This uses a singularity-free orthonormal basis construction inspired by
-     * Frisvad's method, which avoids discontinuities when lightDir is near poles.
-     *
-     * The key insight: instead of a hard threshold switch between up vectors,
-     * we use a mathematical construction that smoothly handles all directions.
+     * @param sunDir Current sun direction
+     * @return true if basis should be updated
      */
-    public void updateLightBasis(Vector3f sunDir) {
+    public boolean shouldUpdateBasis(Vector3f sunDir) {
+        if (!quantizedBasisInitialized) {
+            return true;
+        }
+        float angleDelta = sunDir.angle(lastQuantizedSunDir);
+        return angleDelta >= SUN_QUANTIZATION_THRESHOLD;
+    }
+
+    /**
+     * Update light basis vectors from sun direction using Pixar/Duff's revised method.
+     *
+     * This uses the numerically stable orthonormal basis construction from:
+     * "Building an Orthonormal Basis, Revisited" (Pixar, JCGT 2017)
+     *
+     * @param sunDir Direction TO the sun
+     * @param forceUpdate If true, update even if below quantization threshold
+     * @return true if basis was actually updated
+     */
+    public boolean updateLightBasis(Vector3f sunDir, boolean forceUpdate) {
         // If frozen, use captured values
         if (freezeLightBasis && lightBasisCaptured) {
             lightDir.set(frozenLightDir);
             lightRight.set(frozenLightRight);
             lightUp.set(frozenLightUp);
-            return;
+            return false;
         }
+
+        // Check quantization threshold
+        if (!forceUpdate && quantizedBasisInitialized && !shouldUpdateBasis(sunDir)) {
+            return false;  // No update needed
+        }
+
+        // Record this sun direction as the quantized state
+        lastQuantizedSunDir.set(sunDir);
+        quantizedBasisInitialized = true;
 
         // lightDir points FROM sun TOWARD scene (shadow casting direction)
         lightDir.set(sunDir).negate().normalize();
 
         // ═══════════════════════════════════════════════════════════════════════
-        // STABLE ORTHONORMAL BASIS CONSTRUCTION (Frisvad-inspired)
+        // PIXAR/DUFF ORTHONORMAL BASIS CONSTRUCTION (JCGT 2017)
         // ═══════════════════════════════════════════════════════════════════════
-        // This method creates an orthonormal basis from a single vector without
-        // any discontinuous threshold switches.
-        //
-        // For a normalized vector n = (x, y, z):
-        // - If z > -0.9999999: use the standard Frisvad construction
-        // - Otherwise: handle the degenerate case (n ≈ (0, 0, -1))
-
         float x = lightDir.x;
         float y = lightDir.y;
         float z = lightDir.z;
 
-        if (z > -0.9999999f) {
-            // Standard case: Frisvad's method
-            // This is continuous for all directions except exactly (0, 0, -1)
-            float a = 1.0f / (1.0f + z);
-            float b = -x * y * a;
+        float sign = Math.copySign(1.0f, z);
+        float a = -1.0f / (sign + z);
+        float b = x * y * a;
 
-            lightRight.set(1.0f - x * x * a, b, -x).normalize();
-            lightUp.set(b, 1.0f - y * y * a, -y).normalize();
-        } else {
-            // Degenerate case: lightDir ≈ (0, 0, -1)
-            // This only triggers for a single point, not a threshold band
-            lightRight.set(0, -1, 0);
-            lightUp.set(-1, 0, 0);
-        }
+        // For left-handed (orthoLH compatible), negate xaxis (lightRight):
+        lightRight.set(
+            -(1.0f + sign * x * x * a),
+            -sign * b,
+            sign * x
+        );
+        lightUp.set(b, sign + y * y * a, -y);
 
-        // Ensure perfect orthonormality (numerical cleanup)
-        lightRight.cross(lightDir, lightUp).normalize();
-        lightDir.cross(lightUp, lightRight).normalize();
+        return true;
+    }
+
+    /**
+     * Update light basis (backward compatible - always updates).
+     */
+    public void updateLightBasis(Vector3f sunDir) {
+        updateLightBasis(sunDir, true);
+    }
+
+    /**
+     * Reset the quantization baseline to the given sun direction.
+     * This does NOT update the light basis vectors - it only resets
+     * the reference point for shouldUpdateBasis() checks.
+     *
+     * Use case: After a crossfade completes, we want to measure future
+     * sun movement from the CURRENT position, not from 20 frames ago.
+     */
+    public void resetQuantizationBaseline(Vector3f sunDir) {
+        lastQuantizedSunDir.set(sunDir);
+        quantizedBasisInitialized = true;
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
     // CASCADE MATRIX COMPUTATION
     // ═══════════════════════════════════════════════════════════════════════════
+
+    /**
+     * Compute cascade matrices using an externally-provided light basis.
+     * This is used during leapfrog transitions where we need to update
+     * camera-dependent parts while keeping the light basis frozen.
+     *
+     * @param camera Camera for frustum computation
+     * @param camForward Camera forward vector
+     * @param camRight Camera right vector
+     * @param camUp Camera up vector
+     * @param extLightDir External light direction (frozen)
+     * @param extLightRight External light right vector (frozen)
+     * @param extLightUp External light up vector (frozen)
+     * @return CascadeData with matrices computed using the external basis
+     */
+    public CascadeData computeCascadeMatricesWithBasis(Camera camera,
+            Vector3f camForward, Vector3f camRight, Vector3f camUp,
+            Vector3f extLightDir, Vector3f extLightRight, Vector3f extLightUp) {
+
+        Vector3f camPos = camera.getPosition();
+
+        if (camera instanceof PerspectiveCamera pc) {
+            updateSphereRadii(pc.getFov(), pc.getAspect(), pc.getNear(), pc.getFar());
+        }
+
+        Matrix4f[] matrices = new Matrix4f[cascadeCount];
+        float fovRad = (float) Math.toRadians(cachedFov);
+        float tanHalfFov = (float) Math.tan(fovRad / 2.0f);
+
+        for (int i = 0; i < cascadeCount; i++) {
+            matrices[i] = computeCascadeMatrixWithBasis(i, camPos, camForward, camRight, camUp,
+                tanHalfFov, cachedAspect, extLightDir, extLightRight, extLightUp);
+        }
+
+        return new CascadeData(matrices, splitDistances.clone(), sphereRadii.clone(), texelSizes.clone());
+    }
 
     public CascadeData computeCascadeMatrices(Camera camera, Vector3f camForward, Vector3f camRight, Vector3f camUp) {
         Vector3f camPos = camera.getPosition();
@@ -332,7 +397,6 @@ public class CSMCalculator {
                 frozenSnappedY[cascadeIndex] = snappedY;
                 if (cascadeIndex == cascadeCount - 1) {
                     snappedXYCaptured = true;
-                    System.out.println("[CSM Diag] Snapped XY captured");
                 }
             } else {
                 snappedX = frozenSnappedX[cascadeIndex];
@@ -358,7 +422,6 @@ public class CSMCalculator {
                 frozenMaxZ[cascadeIndex] = maxZ;
                 if (cascadeIndex == cascadeCount - 1) {
                     zRangeCaptured = true;
-                    System.out.println("[CSM Diag] Z Range captured");
                 }
             } else {
                 minZ = frozenMinZ[cascadeIndex];
@@ -367,53 +430,6 @@ public class CSMCalculator {
         }
 
         float orthoDepth = maxZ - minZ;
-
-        // ═══════════════════════════════════════════════════════════════════════
-        // DETAILED LOGGING (cascade 0 only, rate-limited)
-        // ═══════════════════════════════════════════════════════════════════════
-        if (cascadeIndex == 0) {
-            long now = System.currentTimeMillis();
-            if (now - lastDetailedLogTime >= DETAILED_LOG_INTERVAL_MS) {
-                lastDetailedLogTime = now;
-
-                // Compute deltas
-                float deltaLightDir = lightDir.distance(prevLightDir);
-                float deltaLightRight = lightRight.distance(prevLightRight);
-                float deltaLightUp = lightUp.distance(prevLightUp);
-                float deltaSnappedX = Math.abs(snappedX - prevSnappedX);
-                float deltaSnappedY = Math.abs(snappedY - prevSnappedY);
-
-                // Compute snap grid indices
-                int snapIndexX = Math.round(snappedX / texelSize);
-                int snapIndexY = Math.round(snappedY / texelSize);
-
-                System.out.printf("[CSM C0] lightDir=(%.4f,%.4f,%.4f) Δ=%.6f%n",
-                    lightDir.x, lightDir.y, lightDir.z, deltaLightDir);
-                System.out.printf("[CSM C0] lightRight=(%.4f,%.4f,%.4f) Δ=%.6f%n",
-                    lightRight.x, lightRight.y, lightRight.z, deltaLightRight);
-                System.out.printf("[CSM C0] lightUp=(%.4f,%.4f,%.4f) Δ=%.6f%n",
-                    lightUp.x, lightUp.y, lightUp.z, deltaLightUp);
-                System.out.printf("[CSM C0] centerLS=(%.4f,%.4f) snapped=(%.4f,%.4f) grid=(%d,%d) Δsnap=(%.6f,%.6f)%n",
-                    centerLS_X, centerLS_Y, snappedX, snappedY, snapIndexX, snapIndexY, deltaSnappedX, deltaSnappedY);
-                System.out.printf("[CSM C0] sphereCenterZ=%.4f minZ=%.4f maxZ=%.4f orthoDepth=%.4f%n",
-                    sphereCenterZ, minZ, maxZ, orthoDepth);
-
-                // Flag large jumps
-                if (deltaLightRight > 0.01f || deltaLightUp > 0.01f) {
-                    System.out.println("[CSM C0] *** LARGE BASIS JUMP DETECTED ***");
-                }
-                if (deltaSnappedX > texelSize * 2 || deltaSnappedY > texelSize * 2) {
-                    System.out.println("[CSM C0] *** LARGE SNAP JUMP DETECTED ***");
-                }
-
-                // Store for next frame
-                prevLightDir.set(lightDir);
-                prevLightRight.set(lightRight);
-                prevLightUp.set(lightUp);
-                prevSnappedX = snappedX;
-                prevSnappedY = snappedY;
-            }
-        }
 
         // Build light-view matrix
         Matrix4f lightView = new Matrix4f();
@@ -431,6 +447,105 @@ public class CSMCalculator {
         lightView.m02(lightDir.x);
         lightView.m12(lightDir.y);
         lightView.m22(lightDir.z);
+        lightView.m32(-minZ);
+
+        lightView.m03(0);
+        lightView.m13(0);
+        lightView.m23(0);
+        lightView.m33(1);
+
+        // Build orthographic projection
+        Matrix4f lightProj = new Matrix4f().orthoLH(
+            -halfSize, halfSize,
+            -halfSize, halfSize,
+            0.0f, orthoDepth
+        );
+
+        return lightProj.mul(lightView);
+    }
+
+    /**
+     * Compute cascade matrix using an externally-provided light basis.
+     * This variant allows recomputing matrices with camera changes while
+     * keeping the light basis frozen (for leapfrog transitions).
+     */
+    private Matrix4f computeCascadeMatrixWithBasis(
+            int cascadeIndex,
+            Vector3f camPos,
+            Vector3f camForward,
+            Vector3f camRight,
+            Vector3f camUp,
+            float tanHalfFov,
+            float aspect,
+            Vector3f extLightDir,
+            Vector3f extLightRight,
+            Vector3f extLightUp
+    ) {
+        float zNear = splitDistances[cascadeIndex];
+        float zFar = splitDistances[cascadeIndex + 1];
+
+        // Compute frustum corners
+        float nearHalfH = zNear * tanHalfFov;
+        float nearHalfW = nearHalfH * aspect;
+        float farHalfH = zFar * tanHalfFov;
+        float farHalfW = farHalfH * aspect;
+
+        Vector3f nearCenter = new Vector3f(camForward).mul(zNear).add(camPos);
+        Vector3f farCenter = new Vector3f(camForward).mul(zFar).add(camPos);
+
+        computeCorner(frustumCorners[0], nearCenter, camRight, camUp, -nearHalfW, -nearHalfH);
+        computeCorner(frustumCorners[1], nearCenter, camRight, camUp,  nearHalfW, -nearHalfH);
+        computeCorner(frustumCorners[2], nearCenter, camRight, camUp,  nearHalfW,  nearHalfH);
+        computeCorner(frustumCorners[3], nearCenter, camRight, camUp, -nearHalfW,  nearHalfH);
+        computeCorner(frustumCorners[4], farCenter, camRight, camUp, -farHalfW, -farHalfH);
+        computeCorner(frustumCorners[5], farCenter, camRight, camUp,  farHalfW, -farHalfH);
+        computeCorner(frustumCorners[6], farCenter, camRight, camUp,  farHalfW,  farHalfH);
+        computeCorner(frustumCorners[7], farCenter, camRight, camUp, -farHalfW,  farHalfH);
+
+        // Get constant bounds
+        float halfSize = sphereRadii[cascadeIndex];
+        float texelSize = texelSizes[cascadeIndex];
+
+        // Compute sphere center in world space
+        Vector3f sphereCenterWS = new Vector3f(camForward).mul(sphereCenterDistances[cascadeIndex]).add(camPos);
+
+        // Project to light-space XY using EXTERNAL light basis
+        float centerLS_X = sphereCenterWS.dot(extLightRight);
+        float centerLS_Y = sphereCenterWS.dot(extLightUp);
+
+        // Snap to texel grid
+        float snappedX = Math.round(centerLS_X / texelSize) * texelSize;
+        float snappedY = Math.round(centerLS_Y / texelSize) * texelSize;
+
+        // Compute Z range using EXTERNAL light basis
+        float sphereCenterZ = sphereCenterWS.dot(extLightDir);
+        float sphereRadius = sphereRadii[cascadeIndex];
+
+        float minZ = sphereCenterZ - sphereRadius;
+        float maxZ = sphereCenterZ + sphereRadius;
+
+        float casterMargin = (maxZ - minZ) * RenderConfig.CSM_DEPTH_MARGIN_RATIO;
+        minZ -= casterMargin;
+        maxZ += casterMargin;
+
+        float orthoDepth = maxZ - minZ;
+
+        // Build light-view matrix using EXTERNAL light basis
+        Matrix4f lightView = new Matrix4f();
+
+        lightView.m00(extLightRight.x);
+        lightView.m10(extLightRight.y);
+        lightView.m20(extLightRight.z);
+        lightView.m30(-snappedX);
+
+        lightView.m01(extLightUp.x);
+        lightView.m11(extLightUp.y);
+        lightView.m21(extLightUp.z);
+        lightView.m31(-snappedY);
+
+        lightView.m02(extLightDir.x);
+        lightView.m12(extLightDir.y);
+        lightView.m22(extLightDir.z);
         lightView.m32(-minZ);
 
         lightView.m03(0);

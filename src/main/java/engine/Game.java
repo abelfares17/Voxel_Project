@@ -5,7 +5,12 @@ import org.joml.Matrix4f;
 import org.joml.Vector3f;
 import static org.lwjgl.glfw.GLFW.GLFW_CURSOR;
 import static org.lwjgl.glfw.GLFW.GLFW_CURSOR_DISABLED;
+import static org.lwjgl.glfw.GLFW.GLFW_KEY_0;
+import static org.lwjgl.glfw.GLFW.GLFW_KEY_9;
 import static org.lwjgl.glfw.GLFW.GLFW_KEY_ESCAPE;
+import static org.lwjgl.glfw.GLFW.GLFW_KEY_F10;
+import static org.lwjgl.glfw.GLFW.GLFW_KEY_F11;
+import static org.lwjgl.glfw.GLFW.GLFW_KEY_F12;
 import static org.lwjgl.glfw.GLFW.GLFW_KEY_F2;
 import static org.lwjgl.glfw.GLFW.GLFW_KEY_F3;
 import static org.lwjgl.glfw.GLFW.GLFW_KEY_F4;
@@ -14,9 +19,9 @@ import static org.lwjgl.glfw.GLFW.GLFW_KEY_F6;
 import static org.lwjgl.glfw.GLFW.GLFW_KEY_F7;
 import static org.lwjgl.glfw.GLFW.GLFW_KEY_F8;
 import static org.lwjgl.glfw.GLFW.GLFW_KEY_F9;
-import static org.lwjgl.glfw.GLFW.GLFW_KEY_F10;
-import static org.lwjgl.glfw.GLFW.GLFW_KEY_F11;
-import static org.lwjgl.glfw.GLFW.GLFW_KEY_F12;
+import static org.lwjgl.glfw.GLFW.GLFW_KEY_J;
+import static org.lwjgl.glfw.GLFW.GLFW_KEY_K;
+import static org.lwjgl.glfw.GLFW.GLFW_KEY_L;
 import static org.lwjgl.glfw.GLFW.GLFW_KEY_P;
 import static org.lwjgl.glfw.GLFW.GLFW_MOUSE_BUTTON_LEFT;
 import static org.lwjgl.glfw.GLFW.glfwSetInputMode;
@@ -26,6 +31,7 @@ import engine.core.config.RenderConfig;
 import engine.entity.Player;
 import engine.input.Input;
 import engine.physics.PhysicsEngine;
+import engine.render.GLStateValidator;
 import engine.render.TextRenderer;
 import engine.render.camera.PerspectiveCamera;
 import engine.render.core.RenderContext;
@@ -33,7 +39,9 @@ import engine.render.renderer.ShadowRenderer;
 import engine.render.renderer.SkyRenderer;
 import engine.render.renderer.SunRenderer;
 import engine.render.renderer.VoxelRenderer;
+import engine.util.DebugFrameSnapshot;
 import engine.util.ScreenCapture;
+import engine.util.SkyFlashTrace;
 import engine.world.Chunk;
 import engine.world.World;
 
@@ -187,10 +195,21 @@ public class Game {
             showDebugNotification(voxelRenderer.isDebugAO() ? "AO Debug: ON" : "AO Debug: OFF");
         }
 
-        // Cycle shadow debug mode (F4)
+        // Cycle shadow debug mode (F4) - expanded for discontinuity diagnosis
         if (input.isKeyJustPressed(GLFW_KEY_F4)) {
             voxelRenderer.cycleShadowDebug();
-            String[] modes = {"Shadow Debug: OFF", "Shadow Debug: Factor", "Shadow Debug: UV/Depth", "Shadow Debug: Bounds", "Shadow Debug: Cascades", "Shadow Debug: Cascade+Albedo", "Shadow Debug: Raw DEPTH Z", "Shadow Debug: Cascade OOB", "Shadow Debug: Bias (R=scale G=bias B=cascade)"};
+            String[] modes = {
+                "Shadow Debug: OFF",
+                "Shadow Debug: Factor (grayscale)",
+                "Shadow Debug: Cascade Colors",
+                "Shadow Debug: World-Cell Hash",
+                "Shadow Debug: Fog Factor",
+                "Shadow Debug: Cascade SOLID",
+                "Shadow Debug: A/B Diff (R=diff)",
+                "Shadow Debug: Lit Before Fog",
+                "w-Validity Heatmap (Blue=valid, Green=B invalid)",
+                "Leapfrog State (R=active, G=crossfade, B=shadow)"
+            };
             showDebugNotification(modes[voxelRenderer.getDebugShadow()]);
         }
 
@@ -256,12 +275,59 @@ public class Game {
                 showDebugNotification(shadowRenderer.isFreezeSnappedXY() ? "Snapped XY: FROZEN" : "Snapped XY: LIVE");
             }
         }
+
+        // L = Toggle leapfrog shadow system (quantized basis + crossfade)
+        if (input.isKeyJustPressed(GLFW_KEY_L)) {
+            shadowRenderer.toggleLeapfrog();
+            showDebugNotification(shadowRenderer.isLeapfrogEnabled() ? "Leapfrog Shadow: ON" : "Leapfrog Shadow: OFF");
+        }
+
+        // K = Toggle sky color freeze (workaround for shadow transition flashes)
+        if (input.isKeyJustPressed(GLFW_KEY_K)) {
+            RenderConfig.toggleFreezeSkyColor();
+            showDebugNotification(RenderConfig.isFreezeSkyColor() ? "Sky Color: FROZEN (day)" : "Sky Color: DYNAMIC");
+        }
+
+        // J = Toggle one-frame freeze at swap (diagnostic for flash isolation)
+        // If flash STILL occurs with freeze → shader/texture sampling bug
+        // If flash DISAPPEARS → Java-side uniform timing bug
+        if (input.isKeyJustPressed(GLFW_KEY_J)) {
+            shadowRenderer.toggleFreezeOneFrameAtSwap();
+            showDebugNotification(shadowRenderer.isFreezeOneFrameAtSwap()
+                ? "Swap Freeze: ON (1 frame)"
+                : "Swap Freeze: OFF");
+        }
+
+        // 0 = Toggle slow motion mode for debugging swap frames
+        // (Using number key because M key has issues on Mac M2)
+        if (input.isKeyJustPressed(GLFW_KEY_0)) {
+            System.out.println("[DEBUG] 0 key pressed - toggling slow motion");
+            shadowRenderer.toggleSlowMotion();
+            showDebugNotification(shadowRenderer.isSlowMotionEnabled()
+                ? "SLOW MOTION: ON (500ms/frame)"
+                : "SLOW MOTION: OFF");
+        }
+
+        // 9 = Toggle one-frame freeze at swap (backup for J key)
+        if (input.isKeyJustPressed(GLFW_KEY_9)) {
+            System.out.println("[DEBUG] 9 key pressed - toggling swap freeze");
+            shadowRenderer.toggleFreezeOneFrameAtSwap();
+            showDebugNotification(shadowRenderer.isFreezeOneFrameAtSwap()
+                ? "Swap Freeze: ON (1 frame)"
+                : "Swap Freeze: OFF");
+        }
     }
 
     /**
      * Render the game scene using the renderer architecture.
      */
     public void render() {
+        // Increment frame counter for GL state validation (rate-limited debug tool)
+        GLStateValidator.nextFrame();
+
+        // Increment shadow renderer frame ID for debugging
+        shadowRenderer.incrementFrameId();
+
         // Upload mesh data from worker threads
         world.getMeshManager().uploadMeshesIfAny();
 
@@ -274,20 +340,66 @@ public class Game {
         context.setWorld(world);
         context.setWindowSize(winWidth, winHeight);
         context.beginFrame(deltaTime);
+        context.resetSkyClearState();  // Reset diagnostic state for this frame
 
-        // Set filtered sun direction for shadow mapping (reduces shimmer)
-        context.setSunDirection(world.getTimeManager().getSunDirForShadows(deltaTime));
+        // ═══════════════════════════════════════════════════════════════════════════
+        // CACHE TIME-DEPENDENT VALUES FOR FRAME CONSISTENCY
+        // ═══════════════════════════════════════════════════════════════════════════
+        // All time-dependent values are computed ONCE here and cached in RenderContext.
+        // This ensures all renderers use the same values throughout the frame.
+        float timeOfDay = world.getTimeManager().getTimeOfDay();
+        context.setTimeOfDay(timeOfDay);
+        context.setSkyColor(RenderConfig.getSkyColor(timeOfDay));
+        context.setSunDirLighting(world.getTimeManager().getSunData().sunDir());
+        context.setSunDirShadows(world.getTimeManager().getSunData().sunDir());
 
         frameNumber++;
 
-        // Render pipeline
-        skyRenderer.render(context);     // Clear screen with sky color
+        // ═══════════════════════════════════════════════════════════════════════════
+        // SKYFLASH TRACE: FRAME_HEADER
+        // ═══════════════════════════════════════════════════════════════════════════
+        SkyFlashTrace.get().nextFrame();
+        boolean isTransitioning = shadowRenderer.isLeapfrogTransitioning();
+        SkyFlashTrace.get().logFrameHeader(
+            timeOfDay,
+            context.getSunDirLighting(),
+            context.getSkyColor(),
+            deltaTime,
+            isTransitioning
+        );
+
+        // ═══════════════════════════════════════════════════════════════════════════
+        // RENDER PIPELINE
+        // ═══════════════════════════════════════════════════════════════════════════
+        // Each renderer uses appropriate sun direction:
+        // - skyRenderer:    timeOfDay (continuous) for sky color
+        // - shadowRenderer: sunDirShadows (may be quantized internally)
+        // - sunRenderer:    sunDirLighting (continuous) for sun disc position
+        // - voxelRenderer:  sunDirLighting (continuous) for diffuse lighting
+        skyRenderer.render(context);      // Clear screen with sky color
         shadowRenderer.render(context);   // Render shadow depth map
         sunRenderer.render(context);      // Render sun disc
         voxelRenderer.render(context);    // Render voxel world
 
+        // DIAGNOSTIC: Log end-of-frame snapshot (rate-limited)
+        DebugFrameSnapshot.nextFrame();
+        DebugFrameSnapshot.logIfDue("FRAME", context, shadowRenderer);
+
         // Render UI overlay (time, FPS)
         renderUI();
+
+        // SLOW MOTION: Add delay if enabled (for debugging swap frames)
+        if (shadowRenderer.isSlowMotionEnabled()) {
+            // Extra delay on special frames (transition start/stabilization/swap)
+            long delay = shadowRenderer.isSpecialFrame()
+                ? shadowRenderer.getSpecialFrameDelayMs()  // 1.5 second on special frames
+                : shadowRenderer.getSlowMotionDelayMs();   // 500ms on normal frames
+            try {
+                Thread.sleep(delay);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        }
     }
 
     /**
@@ -327,6 +439,53 @@ public class Game {
                 new Vector3f(0.9f, 1f, 0.9f),  // Pale green
                 ortho, winHeight, textScale
         );
+
+        // Display frame state indicator (for swap debugging)
+        String frameStateStr = shadowRenderer.getFrameStateString();
+        if (!frameStateStr.isEmpty()) {
+            // Calculate centered X position
+            float stateTextWidth = frameStateStr.length() * 10 * textScale;
+            float stateCenterX = (winWidth - stateTextWidth) / 2;
+            float stateY = winHeight - 60;  // Near top of screen
+
+            // Color based on frame state
+            Vector3f stateColor;
+            switch (shadowRenderer.getCurrentFrameState()) {
+                case TRANSITION_START_FRAME -> stateColor = new Vector3f(1.0f, 1.0f, 0.0f);  // Yellow
+                case STABILIZATION_FRAME -> stateColor = new Vector3f(0.0f, 1.0f, 0.0f);  // Bright green
+                case SWAP_FRAME -> stateColor = new Vector3f(1.0f, 0.0f, 0.0f);  // Bright red
+                case POST_SWAP_FRAME -> stateColor = new Vector3f(1.0f, 0.5f, 0.0f);  // Orange
+                default -> stateColor = new Vector3f(0.5f, 0.5f, 1.0f);  // Light blue for transitioning
+            }
+
+            textRenderer.drawText(
+                    frameStateStr, stateCenterX, stateY,
+                    stateColor,
+                    ortho, winHeight, textScale
+            );
+
+            // Also display frame ID
+            String frameIdStr = "Frame #" + shadowRenderer.getCurrentFrameId();
+            float frameIdWidth = frameIdStr.length() * 10 * textScale;
+            float frameIdX = (winWidth - frameIdWidth) / 2;
+            textRenderer.drawText(
+                    frameIdStr, frameIdX, stateY - 40,
+                    new Vector3f(1.0f, 1.0f, 1.0f),  // White
+                    ortho, winHeight, textScale
+            );
+        }
+
+        // Display slow motion indicator when enabled
+        if (shadowRenderer.isSlowMotionEnabled()) {
+            String slowMoStr = "[SLOW MOTION]";
+            float slowMoWidth = slowMoStr.length() * 10 * textScale;
+            float slowMoX = (winWidth - slowMoWidth) / 2;
+            textRenderer.drawText(
+                    slowMoStr, slowMoX, winHeight - 180,
+                    new Vector3f(1.0f, 0.0f, 1.0f),  // Magenta
+                    ortho, winHeight, textScale
+            );
+        }
 
         // Display debug notification if active
         if (debugNotificationText != null && System.currentTimeMillis() < debugNotificationEndTime) {
