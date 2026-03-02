@@ -1,19 +1,25 @@
 package engine.core.states;
 
+import static org.lwjgl.glfw.GLFW.GLFW_CURSOR;
+import static org.lwjgl.glfw.GLFW.GLFW_CURSOR_DISABLED;
+import static org.lwjgl.glfw.GLFW.GLFW_CURSOR_NORMAL;
+import static org.lwjgl.glfw.GLFW.glfwSetInputMode;
+
 import engine.Game;
 import engine.core.Application;
 import engine.core.GameState;
 import engine.core.config.GameConfig;
 import engine.input.Input;
+import engine.render.Shader;
 import engine.render.TextRenderer;
 import engine.render.TextureLoader;
-import engine.render.Shader;
 import engine.render.core.RenderContext;
-import engine.render.renderer.*;
+import engine.render.renderer.ShadowRenderer;
+import engine.render.renderer.SkyRenderer;
+import engine.render.renderer.SunRenderer;
+import engine.render.renderer.VoxelRenderer;
 import engine.time.TimeManager;
 import engine.world.World;
-
-import static org.lwjgl.glfw.GLFW.*;
 
 /**
  * Playing state - Main gameplay.
@@ -123,12 +129,12 @@ public class PlayingState implements GameState {
 
     @Override
     public void update(float deltaTime) {
-        game.update();
+        game.update(deltaTime);
     }
 
     @Override
     public void render(RenderContext context) {
-        game.render();
+        game.render(context);
     }
 
     @Override

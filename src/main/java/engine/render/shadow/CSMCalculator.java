@@ -6,7 +6,6 @@ import org.joml.Vector3f;
 import engine.core.config.RenderConfig;
 import engine.render.camera.Camera;
 import engine.render.camera.PerspectiveCamera;
-import engine.util.CSMDebugLog;
 
 /**
  * Cascaded Shadow Map (CSM) Calculator using Stabilized Fit algorithm.
@@ -191,7 +190,7 @@ public class CSMCalculator {
 
     // Quantization threshold: only update basis when sun moves more than this angle (radians)
     // 0.5 degrees ≈ 0.00873 radians
-    private static final float SUN_QUANTIZATION_THRESHOLD = 0.00873f;
+    private static final float SUN_QUANTIZATION_THRESHOLD = 0.006981317f; /* (0.4°) */
 
     /**
      * Check if the sun direction has changed enough to warrant a basis update.

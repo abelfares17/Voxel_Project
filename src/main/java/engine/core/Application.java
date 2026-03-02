@@ -18,6 +18,7 @@ import static org.lwjgl.glfw.GLFW.glfwDestroyWindow;
 import static org.lwjgl.glfw.GLFW.glfwGetFramebufferSize;
 import static org.lwjgl.glfw.GLFW.glfwGetPrimaryMonitor;
 import static org.lwjgl.glfw.GLFW.glfwGetVideoMode;
+import static org.lwjgl.glfw.GLFW.glfwGetWindowSize;
 import static org.lwjgl.glfw.GLFW.glfwInit;
 import static org.lwjgl.glfw.GLFW.glfwMakeContextCurrent;
 import static org.lwjgl.glfw.GLFW.glfwPollEvents;
@@ -37,16 +38,17 @@ import static org.lwjgl.opengl.GL11.GL_DEPTH_TEST;
 import static org.lwjgl.opengl.GL11.GL_FILL;
 import static org.lwjgl.opengl.GL11.GL_FRONT_AND_BACK;
 import static org.lwjgl.opengl.GL11.glEnable;
+import static org.lwjgl.opengl.GL11.glFinish;
 import static org.lwjgl.opengl.GL11.glPolygonMode;
 import static org.lwjgl.opengl.GL11.glViewport;
 import static org.lwjgl.opengl.GL30.GL_FRAMEBUFFER_SRGB;
 
 import engine.core.config.GameConfig;
 import engine.core.states.MenuState;
+import engine.core.states.PlayingState;
 import engine.input.Input;
 import engine.render.UIScreenScaler;
 import engine.render.core.RenderContext;
-import engine.util.CSMDebugLog;
 import engine.world.BlockRegistry;
 
 /**
@@ -63,6 +65,10 @@ public class Application {
     private long lastFrameTime;
     private int windowWidth;
     private int windowHeight;
+
+    private double fpsT0 = org.lwjgl.glfw.GLFW.glfwGetTime();
+    private int fpsFrames = 0;
+    private int fpsReal = 0;
 
     /**
      * Run the application (init -> loop -> cleanup).
@@ -101,6 +107,7 @@ public class Application {
 
         windowWidth = vidMode.width();
         windowHeight = vidMode.height() - GameConfig.WINDOW_HEIGHT_REDUCTION;
+        //glfwWindowHint(GLFW_COCOA_RETINA_FRAMEBUFFER, GLFW_FALSE);
         window = glfwCreateWindow(windowWidth, windowHeight, GameConfig.WINDOW_TITLE, 0, 0);
 
         if (window == 0) {
@@ -136,6 +143,14 @@ public class Application {
         windowHeight = fbH.get(0);
         float aspect = (float) windowWidth / windowHeight;
         System.out.println("Viewport = " + windowWidth + "×" + windowHeight + "; aspect = " + aspect);
+        var vid = glfwGetVideoMode(glfwGetPrimaryMonitor());
+        System.out.println("refresh=" + (vid != null ? vid.refreshRate() : -1));
+        int[] ww = new int[1], wh = new int[1];
+        int[] fw = new int[1], fh = new int[1];
+        glfwGetWindowSize(window, ww, wh);
+        glfwGetFramebufferSize(window, fw, fh);
+        System.out.println("window=" + ww[0] + "x" + wh[0] + " framebuffer=" + fw[0] + "x" + fh[0]
+            + " scale=" + (fw[0] / (float)ww[0]));
 
         // OpenGL settings
         glViewport(0, 0, windowWidth, windowHeight);
@@ -183,15 +198,47 @@ public class Application {
             long currentTime = System.currentTimeMillis();
             float deltaTime = (currentTime - lastFrameTime) / 1000.0f;
             lastFrameTime = currentTime;
-
+            
+            long t0 = System.nanoTime();
             // Update current state
+            long tUpdate0 = System.nanoTime();
             stateManager.update(deltaTime);
+            long tUpdate1 = System.nanoTime();
 
-            // Render current state
+            // Render current state (and time it)
+            long tRender0 = System.nanoTime();
             renderContext.beginFrame(deltaTime);
+            renderContext.setFpsReal(fpsReal);
             stateManager.render(renderContext);
+            long tRender1 = System.nanoTime();
 
+            //Synchronize GPU and CPU to get accurate timing for swap buffers
+            long tF0 = System.nanoTime();
+            glFinish();
+            long tF1 = System.nanoTime();
+
+            // Swap buffers and time it
+            long tSwap0 = System.nanoTime();
             glfwSwapBuffers(window);
+            long tSwap1 = System.nanoTime();
+
+            long t1 = System.nanoTime();
+            if (stateManager.getCurrentState() instanceof PlayingState) {
+                double msUpdate = (tUpdate1 - tUpdate0) / 1e6;
+                double msRender = (tRender1 - tRender0) / 1e6;
+                double msSwap   = (tSwap1   - tSwap0) / 1e6;
+                double msFrame  = (t1 - t0) / 1e6;
+                double msFinish = (tF1 - tF0)/1e6;
+                System.out.printf("Frame time: %.2f ms (update=%.2f ms, render=%.2f ms, glfinish=%.2fms, swap=%.2f ms)%n",
+                    msFrame, msUpdate, msRender, msFinish, msSwap);
+            }
+            fpsFrames++;
+            double t = org.lwjgl.glfw.GLFW.glfwGetTime();
+            if (t - fpsT0 >= 1.0) {
+                fpsReal = fpsFrames;
+                fpsFrames = 0;
+                fpsT0 = t;
+            }
         }
     }
 
@@ -200,7 +247,6 @@ public class Application {
      */
     private void cleanup() {
         System.out.println("Cleaning up application...");
-        CSMDebugLog.get().close();
         stateManager.cleanup();
         renderContext.cleanup();
         glfwDestroyWindow(window);

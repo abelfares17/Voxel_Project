@@ -1,5 +1,17 @@
 #version 150
 
+#define PERF_BISECT_STAGE 5
+// 0 = normal
+// 1 = shading trivial (albedo only)
+// 2 = lighting sans AO/fog/shadow
+// 3 = +AO only
+// 4 = +fog only
+// 5 = +shadow SINGLE A only (1 fetch)
+// 6 = +shadow PCF A only (PCF_SAMPLE_COUNT taps)
+// 7 = +leapfrog transition: A PCF + B SINGLE (PCF+1)
+// 8 = full leapfrog: A PCF + B PCF (2*PCF) but NO dFdx/dFdy
+// 9 = full original (including dFdx/dFdy hybrid)
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // SHADOW FILTER MODE (compile-time constant)
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -9,9 +21,13 @@
 #define SHADOW_FILTER_MODE 2
 
 // World-stable PCF configuration
-#define WORLD_CELL_SIZE 4.0        // World units per cell (meters)
+#define WORLD_CELL_SIZE 4.0        // World units per cell (meters) for PCF rotation
 #define PCF_RADIUS_TEXELS 1.5      // PCF radius in shadow map texels
-#define PCF_SAMPLE_COUNT 8         // Number of Poisson samples
+#define PCF_SAMPLE_COUNT 4         // Number of Poisson samples
+
+// Stochastic crossfade (dither A/B) configuration
+// Smaller = finer dither grain, larger = coarser pattern
+#define WORLD_DITHER_CELL_SIZE 0.125  // World units per dither cell
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // INPUTS
@@ -33,8 +49,8 @@ in vec4 vLightSpacePosB[MAX_CASCADES];  // Secondary light-space positions (for 
 // ═══════════════════════════════════════════════════════════════════════════════
 
 uniform sampler2D textureSampler;
-uniform sampler2DArrayShadow shadowMapArray;      // Primary shadow map (current)
-uniform sampler2DArrayShadow shadowMapArrayB;     // Secondary shadow map (for crossfade)
+uniform sampler2DArray shadowMapArray;      // Primary shadow map (current)
+uniform sampler2DArray shadowMapArrayB;     // Secondary shadow map (for crossfade)
 
 uniform vec3 sunDir;
 uniform vec3 sunColor;
@@ -67,6 +83,7 @@ uniform float cascadeSplitsB[MAX_CASCADES + 1];   // Secondary cascade splits
 uniform float cascadeTexelSizesB[MAX_CASCADES];   // Secondary texel sizes
 uniform float shadowCrossfade;                     // 0 = fully primary, 1 = fully secondary
 uniform int leapfrogActive;                        // 1 if transitioning, 0 otherwise
+uniform int blendMode;                             // 0 = dither (stochastic), 1 = linear (smooth mix)
 
 // Debug mode (expanded for discontinuity diagnosis):
 // 0 = off (normal rendering)
@@ -207,33 +224,42 @@ float computeBias(int cascade, vec3 normal, vec3 lightDir) {
  * No filtering, just direct depth comparison.
  */
 float sampleShadowSingle(int cascade, vec2 shadowUV, float refDepth, float bias) {
-    return texture(shadowMapArray, vec4(shadowUV, float(cascade), refDepth - bias));
+    float compareDepth = refDepth - bias;
+    float depth = texture(shadowMapArray, vec3(shadowUV, float(cascade))).r;
+    return (depth < compareDepth) ? 0.0 : 1.0;
 }
 
 /**
  * Current PCF implementation (Mode 1 - reference).
  * Uses world-position-based rotation which causes shimmer when sun moves.
  */
-float sampleShadowCurrentPCF(int cascade, vec3 worldPos, vec2 shadowUV, float refDepth, float bias) {
-    // World-jittered rotation (causes shimmer with sun movement)
-    float rnd = fract(sin(dot(floor(worldPos.xz), vec2(127.1, 311.7))) * 43758.5453123);
-    float angle = rnd * 6.2831853;
+float sampleShadowdCurrentPCF(int cascade, vec3 worldPos, vec2 shadowUV, float refDepth, float bias) {
+    float compareDepth = refDepth - bias;
+
+    ivec2 cell = ivec2(floor(worldPos.xz / WORLD_CELL_SIZE));
+    float cellHash = hashCell(cell);
+    float angle = cellHash * 6.2831853;
+
     float c = cos(angle);
     float s = sin(angle);
     mat2 rot = mat2(c, -s, s, c);
 
-    // Cascade-scaled radius
-    float cascadeScale = cascadeTexelSizes[cascade] / max(cascadeTexelSizes[0], 0.0001);
-    float pcfRadius = 1.5 * min(cascadeScale, 3.0);
     vec2 texelSize = vec2(shadowMapInvSize);
 
+    float cascadeScale = cascadeTexelSizes[cascade] / max(cascadeTexelSizes[0], 0.0001);
+    cascadeScale = min(cascadeScale, 2.0);
+    float radius = PCF_RADIUS_TEXELS * cascadeScale;
+
     float shadow = 0.0;
-    for (int i = 0; i < 8; ++i) {
-        vec2 o = rot * POISSON_8[i];
-        vec2 offset = o * pcfRadius * texelSize;
-        shadow += texture(shadowMapArray, vec4(shadowUV + offset, float(cascade), refDepth - bias));
+    for (int i = 0; i < PCF_SAMPLE_COUNT; ++i) {
+        vec2 rotatedSample = rot * POISSON_8[i];
+        vec2 offset = rotatedSample * radius * texelSize;
+
+        float depth = texture(shadowMapArray, vec3(shadowUV + offset, float(cascade))).r;
+        shadow += (depth < compareDepth) ? 0.0 : 1.0;
     }
-    return shadow / 8.0;
+
+    return shadow / float(PCF_SAMPLE_COUNT);
 }
 
 /**
@@ -245,6 +271,7 @@ float sampleShadowCurrentPCF(int cascade, vec3 worldPos, vec2 shadowUV, float re
  * - Rotation angle is constant per world cell
  */
 float sampleShadowWorldStable(int cascade, vec3 worldPos, vec2 shadowUV, float refDepth, float bias) {
+    float compareDepth = refDepth - bias;
     // ─────────────────────────────────────────────────────────────────────
     // STEP 1: Quantize world position to stable grid cell
     // ─────────────────────────────────────────────────────────────────────
@@ -278,7 +305,8 @@ float sampleShadowWorldStable(int cascade, vec3 worldPos, vec2 shadowUV, float r
         vec2 rotatedSample = rot * POISSON_8[i];
         vec2 offset = rotatedSample * radius * texelSize;
 
-        shadow += texture(shadowMapArray, vec4(shadowUV + offset, float(cascade), refDepth - bias));
+        float depth = texture(shadowMapArray, vec3(shadowUV + offset, float(cascade))).r;
+        shadow += (depth < compareDepth) ? 0.0 : 1.0;
     }
 
     return shadow / float(PCF_SAMPLE_COUNT);
@@ -288,7 +316,7 @@ float sampleShadowWorldStable(int cascade, vec3 worldPos, vec2 shadowUV, float r
  * Single sample shadow from a specific array (fast, for crossfade transitions).
  * Used during leapfrog transitions to reduce GPU cost of 2x shadow sampling.
  */
-float sampleShadowSingleFromArray(sampler2DArrayShadow shadowArray, int cascade,
+float sampleShadowSingleFromArray(sampler2DArray shadowArray, int cascade,
                                    vec3 projCoords, float bias) {
     // Out-of-bounds check - return fully lit
     if (projCoords.z > 1.0 || projCoords.z < 0.0 ||
@@ -296,47 +324,66 @@ float sampleShadowSingleFromArray(sampler2DArrayShadow shadowArray, int cascade,
         projCoords.y < 0.0 || projCoords.y > 1.0) {
         return 1.0;
     }
-    return texture(shadowArray, vec4(projCoords.xy, float(cascade), projCoords.z - bias));
+
+    float compareDepth = projCoords.z - bias;
+    float depth = texture(shadowArray, vec3(projCoords.xy, float(cascade))).r;
+    return (depth < compareDepth) ? 0.0 : 1.0;
 }
 
 /**
- * Sample shadow from a specific shadow map array with full PCF.
- * Used when NOT transitioning (normal rendering).
+ * Manual depth-compare shadow sampling (NO hardware compare)
  */
-float sampleShadowPCFFromArray(sampler2DArrayShadow shadowArray, int cascade, vec3 worldPos,
-                                vec3 projCoords, float bias) {
-    // Out-of-bounds check - return fully lit
+float sampleShadowPCFFromArray(
+    sampler2DArray shadowArray,
+    int cascade,
+    vec3 worldPos,
+    vec3 projCoords,
+    float bias)
+{
+    // Out-of-bounds → fully lit
     if (projCoords.z > 1.0 || projCoords.z < 0.0 ||
         projCoords.x < 0.0 || projCoords.x > 1.0 ||
         projCoords.y < 0.0 || projCoords.y > 1.0) {
         return 1.0;
     }
 
-    // Route to appropriate shadow sampling function
+    float compareDepth = projCoords.z - bias;
+
     #if SHADOW_FILTER_MODE == 0
-        // Mode 0: Single sample (reference)
-        return texture(shadowArray, vec4(projCoords.xy, float(cascade), projCoords.z - bias));
+        // Single sample
+        float depth = texture(shadowArray, vec3(projCoords.xy, float(cascade))).r;
+        return depth < compareDepth ? 0.0 : 1.0;
+
     #elif SHADOW_FILTER_MODE == 1
-        // Mode 1: Current PCF (reference) - inline version for custom array
+
         float rnd = fract(sin(dot(floor(worldPos.xz), vec2(127.1, 311.7))) * 43758.5453123);
         float angle = rnd * 6.2831853;
         float c = cos(angle);
         float s = sin(angle);
         mat2 rot = mat2(c, -s, s, c);
 
-        float cascadeScale = cascadeTexelSizes[cascade] / max(cascadeTexelSizes[0], 0.0001);
+        float cascadeScale = cascadeTexelSizes[cascade] /
+                             max(cascadeTexelSizes[0], 0.0001);
         float pcfRadius = 1.5 * min(cascadeScale, 3.0);
+
         vec2 texelSize = vec2(shadowMapInvSize);
 
         float shadow = 0.0;
+
         for (int i = 0; i < 8; ++i) {
             vec2 o = rot * POISSON_8[i];
             vec2 offset = o * pcfRadius * texelSize;
-            shadow += texture(shadowArray, vec4(projCoords.xy + offset, float(cascade), projCoords.z - bias));
+
+            vec3 uvw = vec3(projCoords.xy + offset, float(cascade));
+            float depth = texture(shadowArray, uvw).r;
+
+            shadow += (depth < compareDepth) ? 0.0 : 1.0;
         }
+
         return shadow / 8.0;
+
     #else
-        // Mode 2: World-stable PCF (NEW) - inline version for custom array
+
         ivec2 cell = ivec2(floor(worldPos.xz / WORLD_CELL_SIZE));
         float cellHash = hashCell(cell);
         float angle = cellHash * 6.2831853;
@@ -346,17 +393,27 @@ float sampleShadowPCFFromArray(sampler2DArrayShadow shadowArray, int cascade, ve
         mat2 rot = mat2(c, -s, s, c);
 
         vec2 texelSize = vec2(shadowMapInvSize);
-        float cascadeScale = cascadeTexelSizes[cascade] / max(cascadeTexelSizes[0], 0.0001);
+
+        float cascadeScale = cascadeTexelSizes[cascade] /
+                             max(cascadeTexelSizes[0], 0.0001);
         cascadeScale = min(cascadeScale, 2.0);
+
         float radius = PCF_RADIUS_TEXELS * cascadeScale;
 
         float shadow = 0.0;
+
         for (int i = 0; i < PCF_SAMPLE_COUNT; ++i) {
             vec2 rotatedSample = rot * POISSON_8[i];
             vec2 offset = rotatedSample * radius * texelSize;
-            shadow += texture(shadowArray, vec4(projCoords.xy + offset, float(cascade), projCoords.z - bias));
+
+            vec3 uvw = vec3(projCoords.xy + offset, float(cascade));
+            float depth = texture(shadowArray, uvw).r;
+
+            shadow += (depth < compareDepth) ? 0.0 : 1.0;
         }
+
         return shadow / float(PCF_SAMPLE_COUNT);
+
     #endif
 }
 
@@ -370,58 +427,105 @@ float sampleShadowPCFFromArray(sampler2DArrayShadow shadowArray, int cascade, ve
  * without any quality drop.
  */
 float calculateShadow(vec3 normal, vec3 lightDir, vec3 worldPos, float viewDepth) {
+    
+    #if PERF_BISECT_STAGE <= 4
+        return 1.0;
+    #endif
     // Use same cascade selection for A and B (splits are identical during transition)
     int cascade = selectCascade(viewDepth);
 
     // Compute bias
     float bias = computeBias(cascade, normal, lightDir);
 
-    // Get light-space position for primary cascade
+    // Primary light-space projection
     vec4 lightSpacePos = vLightSpacePos[cascade];
     vec3 projCoords = lightSpacePos.xyz / lightSpacePos.w;
     projCoords = projCoords * 0.5 + 0.5;
 
-    // ═══════════════════════════════════════════════════════════════════════
-    // UNIFIED SHADOW PATH: Always compute shadowA the same way
-    // ═══════════════════════════════════════════════════════════════════════
-    // INVARIANT: This ensures the primary shadow sampling is IDENTICAL
-    // regardless of whether we're transitioning or not. This eliminates
-    // any branch-dependent GPU execution differences.
+    #if PERF_BISECT_STAGE == 5
+    // SINGLE SAMPLE A only (1 fetch)
+        return sampleShadowSingleFromArray(shadowMapArray, cascade, projCoords, bias);
+    #endif
 
+    #if PERF_BISECT_STAGE == 6
+    // PCF A only (PCF_SAMPLE_COUNT fetch)
+        return sampleShadowPCFFromArray(shadowMapArray, cascade, worldPos, projCoords, bias);
+    #endif
+
+
+    // Not transitioning → A only
     float shadowA = sampleShadowPCFFromArray(shadowMapArray, cascade, worldPos, projCoords, bias);
-
-    // ═══════════════════════════════════════════════════════════════════════
-    // LEAPFROG BLEND: Only compute B if actually needed for blending
-    // ═══════════════════════════════════════════════════════════════════════
-    // At crossfade <= 0.001, we return shadowA directly (no B computation)
-    // This threshold is small enough to be visually imperceptible
-
-    if (leapfrogActive == 1 && shadowCrossfade > 0.001) {
-        // Get secondary light-space position (same cascade index)
-        vec4 lightSpacePosB = vLightSpacePosB[cascade];
-
-        // Defensive guard against invalid w (shouldn't happen with vertex shader fix)
-        // This prevents NaN/Inf from propagating if w is somehow near zero
-        float wB = lightSpacePosB.w;
-        if (abs(wB) > 0.0001) {
-            vec3 projCoordsB = lightSpacePosB.xyz / wB;
-            projCoordsB = projCoordsB * 0.5 + 0.5;
-
-            // Sample B with full PCF (same quality as A)
-            float shadowB = sampleShadowPCFFromArray(shadowMapArrayB, cascade, worldPos, projCoordsB, bias);
-
-            // Crossfade: 0 = fully A, 1 = fully B
-            // At crossfade > 0.999, we're essentially 100% B
-            return mix(shadowA, shadowB, shadowCrossfade);
-        }
-        // If w is invalid, fall through to return shadowA
+    if (leapfrogActive != 1) {
+        return shadowA;
     }
 
-    // Return shadowA for:
-    // - Normal mode (leapfrogActive == 0)
-    // - Transition start (crossfade <= 0.001)
-    // - Invalid B coordinates (defensive fallback)
-    return shadowA;
+    // Fast paths
+    if (shadowCrossfade <= 0.001) {
+        return shadowA;
+    }
+
+    // Compute B once (needed for hybrid "front-like" dither)
+    vec4 lightSpacePosB = vLightSpacePosB[cascade];
+    float wB = lightSpacePosB.w;
+
+    if (abs(wB) <= 0.0001) {
+        return shadowA; // defensive fallback
+    }
+
+    vec3 projCoordsB = lightSpacePosB.xyz / wB;
+    projCoordsB = projCoordsB * 0.5 + 0.5;
+
+    #if PERF_BISECT_STAGE == 7
+        // Transition: A PCF + B SINGLE (PCF + 1 fetch)
+        float shadowB = sampleShadowSingleFromArray(shadowMapArrayB, cascade, projCoordsB, bias);
+        if (blendMode == 1) return mix(shadowA, shadowB, shadowCrossfade);
+        float n = fract(sin(dot(worldPos.xz * 53.0, vec2(127.1, 311.7))) * 43758.5453123);
+        return (n < shadowCrossfade) ? shadowB : shadowA;
+    #endif
+
+    #if PERF_BISECT_STAGE == 8
+        // Transition: A PCF + B PCF (2*PCF fetch) mais SANS dFdx/dFdy
+        float shadowB = sampleShadowPCFFromArray(shadowMapArrayB, cascade, worldPos, projCoordsB, bias);
+        if (blendMode == 1) return mix(shadowA, shadowB, shadowCrossfade);
+        float n = fract(sin(dot(worldPos.xz * 53.0, vec2(127.1, 311.7))) * 43758.5453123);
+        return (n < shadowCrossfade) ? shadowB : shadowA;
+    #endif
+
+    // ─────────────────────────────────────────────────────────────────────
+    // HYBRID DITHER CROSSFADE (blendMode == 0):
+    //   - base is world-stable stochastic dither (binary A/B)
+    //   - BUT we bias the local progress toward switching near the shadow edge
+    //     using screen-space derivatives of shadowA/shadowB.
+    // Result: looks like a "front" that recedes, not uniform stipple.
+    // ─────────────────────────────────────────────────────────────────────
+    #if PERF_BISECT_STAGE == 9
+        float shadowB = sampleShadowPCFFromArray(shadowMapArrayB, cascade, worldPos, projCoordsB, bias);
+        // Edge strength (high near penumbra / transition areas)
+        float eA = abs(dFdx(shadowA)) + abs(dFdy(shadowA));
+        float eB = abs(dFdx(shadowB)) + abs(dFdy(shadowB));
+        float edge = max(eA, eB);
+
+        // Tune knobs (start here, then tweak)
+        const float EDGE_GAIN = 40.0;      // try 20..80
+        const float EDGE_ADVANCE = 0.35;   // try 0.2..0.6
+
+        edge = clamp(edge * EDGE_GAIN, 0.0, 1.0);
+
+        // Locally advanced progress: edges switch earlier
+        float t = clamp(shadowCrossfade + edge * EDGE_ADVANCE, 0.0, 1.0);
+        t = smoothstep(0.0, 1.0, t);
+
+        // World-stable fine-grain noise (avoid chunky WORLD_DITHER_CELL_SIZE blocks)
+        // (Still stable in world space; will not shimmer with camera rotation.)
+        float n = fract(sin(dot(worldPos.xz * 53.0, vec2(127.1, 311.7))) * 43758.5453123);
+
+        // Binary choice: B wins progressively, earlier near edges
+        float chooseB = step(n, t);
+
+        return (chooseB > 0.5) ? shadowB : shadowA;
+    #endif
+    float shadowB = sampleShadowPCFFromArray(shadowMapArrayB, cascade, worldPos, projCoordsB, bias);
+    return mix(shadowA, shadowB, shadowCrossfade);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -433,6 +537,8 @@ void main() {
     vec3 L = normalize(sunDir);  // sunDir points TO the sun
 
     int cascade = selectCascade(vViewDepth);
+
+    if (debugShadow > 0) { fragColor = vec4(1,0,0,1); return; }
 
     // ─────────────────────────────────────────────────────────────────────
     // DEBUG MODES (expanded for discontinuity diagnosis)
@@ -586,35 +692,70 @@ void main() {
     }
 
     // ─────────────────────────────────────────────────────────────────────
-    // NORMAL RENDERING
+    // PERF BISECT SWITCH
     // ─────────────────────────────────────────────────────────────────────
+
+    #if PERF_BISECT_STAGE == 0
+        fragColor = vec4(1.0, 0.0, 1.0, 1.0);
+        return;
+    #endif
+
     vec3 albedo = texture(textureSampler, vTexCoord).rgb * 0.8;
     float diff = max(dot(N, L), 0.0);
-    float shadow = calculateShadow(N, L, vWorldPos, vViewDepth);
 
-    // AO
-    float aoMinVal = aoMin > 0.0 ? aoMin : 0.5;
-    float aoPowerVal = aoPower > 0.0 ? aoPower : 2.0;
-    float aoRemapped = pow(vAO, aoPowerVal);
-    float aoFactor = mix(aoMinVal, 1.0, aoRemapped);
-
-    if (debugAO == 1) {
-        fragColor = vec4(vec3(aoRemapped), 1.0);
+    #if PERF_BISECT_STAGE == 1
+        fragColor = vec4(albedo, 1.0);
         return;
-    }
 
-    // Hemisphere ambient
-    float hemisphereBlend = N.y * 0.5 + 0.5;
-    vec3 skyColor = skyAmbientColor.r > 0.0 ? skyAmbientColor : vec3(0.6, 0.7, 0.9);
-    vec3 groundColor = groundAmbientColor.r > 0.0 ? groundAmbientColor : vec3(0.4, 0.35, 0.3);
-    vec3 hemisphereAmbient = mix(groundColor, skyColor, hemisphereBlend);
+    #elif PERF_BISECT_STAGE == 2
+        // Lighting minimal (pas AO, pas fog, pas shadow)
+        vec3 color = albedo * (ambient + sunColor * diff);
+        fragColor = vec4(color, 1.0);
+        return;
 
-    vec3 indirect = hemisphereAmbient * ambient * aoFactor;
-    vec3 direct = sunColor * diff * shadow;
-    vec3 color = albedo * (indirect + direct);
+    #elif PERF_BISECT_STAGE == 3
+        // + AO only
+        float aoMinVal = aoMin > 0.0 ? aoMin : 0.5;
+        float aoPowerVal = aoPower > 0.0 ? aoPower : 2.0;
+        float aoRemapped = pow(vAO, aoPowerVal);
+        float aoFactor = mix(aoMinVal, 1.0, aoRemapped);
 
-    // Fog
-    float dist = length(cameraPos - vWorldPos);
-    float fogFactor = clamp((fogEnd - dist) / (fogEnd - fogStart), 0.0, 1.0);
-    fragColor = mix(vec4(fogColor, 1.0), vec4(color, 1.0), fogFactor);
+        vec3 color = albedo * (ambient * aoFactor + sunColor * diff);
+        fragColor = vec4(color, 1.0);
+        return;
+
+    #elif PERF_BISECT_STAGE == 4
+        // + fog only (no AO, no shadow)
+        vec3 color = albedo * (ambient + sunColor * diff);
+        float dist = length(cameraPos - vWorldPos);
+        float fogFactor = clamp((fogEnd - dist) / (fogEnd - fogStart), 0.0, 1.0);
+        fragColor = mix(vec4(fogColor, 1.0), vec4(color, 1.0), fogFactor);
+        return;
+
+    #else
+        // Shadow path (stages 5..9 go through calculateShadow)
+        float shadow = calculateShadow(N, L, vWorldPos, vViewDepth);
+
+        // AO
+        float aoMinVal = aoMin > 0.0 ? aoMin : 0.5;
+        float aoPowerVal = aoPower > 0.0 ? aoPower : 2.0;
+        float aoRemapped = pow(vAO, aoPowerVal);
+        float aoFactor = mix(aoMinVal, 1.0, aoRemapped);
+
+        // Hemisphere ambient
+        float hemisphereBlend = N.y * 0.5 + 0.5;
+        vec3 skyColor = skyAmbientColor.r > 0.0 ? skyAmbientColor : vec3(0.6, 0.7, 0.9);
+        vec3 groundColor = groundAmbientColor.r > 0.0 ? groundAmbientColor : vec3(0.4, 0.35, 0.3);
+        vec3 hemisphereAmbient = mix(groundColor, skyColor, hemisphereBlend);
+
+        vec3 indirect = hemisphereAmbient * ambient * aoFactor;
+        vec3 direct = sunColor * diff * shadow;
+        vec3 color = albedo * (indirect + direct);
+
+        // Fog
+        float dist = length(cameraPos - vWorldPos);
+        float fogFactor = clamp((fogEnd - dist) / (fogEnd - fogStart), 0.0, 1.0);
+        fragColor = mix(vec4(fogColor, 1.0), vec4(color, 1.0), fogFactor);
+        return;
+    #endif
 }

@@ -1,9 +1,10 @@
 package engine.render.core;
 
-import engine.render.camera.Camera;
-import engine.world.World;
 import org.joml.Matrix4f;
 import org.joml.Vector3f;
+
+import engine.render.camera.Camera;
+import engine.world.World;
 
 /**
  * Rendering context shared across all states.
@@ -18,6 +19,8 @@ public class RenderContext {
     private int windowHeight;
     private float deltaTime;
     private float aspectRatio;
+    private float dayNightPeriodSec;
+    private int fpsReal;
 
     // ═══════════════════════════════════════════════════════════════════════════
     // SUN DIRECTION SPLIT
@@ -145,6 +148,10 @@ public class RenderContext {
     public int getWindowHeight() { return windowHeight; }
     public float getDeltaTime() { return deltaTime; }
     public float getAspectRatio() { return aspectRatio; }
+    public float getDayNightPeriodSec() {return dayNightPeriodSec;}
+    public void setDayNightPeriodSec(float d) {dayNightPeriodSec = d;}
+    public int getFpsReal() { return fpsReal; }
+    public void setFpsReal(int fpsReal) { this.fpsReal = fpsReal; }
 
     // ═══════════════════════════════════════════════════════════════════════════
     // FRAME-CACHED SKY COLOR ACCESSORS

@@ -29,7 +29,7 @@ public class GameConfig {
     public static final boolean WINDOW_RESIZABLE = true;
 
     /** Enable V-Sync (1 = enabled, 0 = disabled) */
-    public static final int VSYNC_ENABLED = 1;
+    public static final int VSYNC_ENABLED = 0;
 
 
     // === OPENGL CONFIGURATION ===

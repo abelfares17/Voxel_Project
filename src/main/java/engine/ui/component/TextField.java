@@ -105,7 +105,7 @@ public class TextField implements UIComponent {
             // When gaining focus, move caret to end
             if (focused && !wasFocused) {
                 caretPosition = text.length();
-                System.out.println("TextField clicked -> setting focus true");
+                //System.out.println("TextField clicked -> setting focus true");
             }
         }
 

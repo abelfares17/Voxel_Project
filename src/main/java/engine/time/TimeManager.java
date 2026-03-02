@@ -7,7 +7,10 @@ import org.joml.Vector3f;
  */
 public class TimeManager {
     private float timeOfDay; // entre 0.0 (minuit) et 1.0 (prochain minuit)
-    private static final float BASE_SPEED = 1f / 600000f; // 1 cycle complet = 60 sec
+    private static final float BASE_SPEED = 1f / 600000f; // 1 cycle complet = 600 sec
+
+    // Day/night cycle period in seconds (derived from BASE_SPEED: 1/600000 per ms = 600s per cycle)
+    private static final float DAY_NIGHT_PERIOD_SEC = 600.0f;
 
     // Debug: time speed multiplier (1.0 = normal, 0.1 = 10x slower, 10.0 = 10x faster)
     private float debugSpeedMultiplier = 1.0f;  // Default: normal speed
@@ -20,14 +23,36 @@ public class TimeManager {
     // Debug: pause sun/time progression
     private boolean paused = false;
 
+    private long lastDeltaMillis = 0;
+    private float lastTimeBefore = 0f;
+    private float lastTimeAfter  = 0f;
+    private long lastDeltaMillisClamped = 0;
+    private float lastDeltaSecondsClamped;
+    private static final long MAX_DT_FOR_TIME_MS = 50;
+
 
     public void update(long deltaMillis) {
-        //System.out.println("deltaMillis = " + deltaMillis); // DEBUG
+        lastDeltaMillis = deltaMillis;
+
         if (!paused) {
-            timeOfDay += deltaMillis * BASE_SPEED * debugSpeedMultiplier;
+            lastTimeBefore = timeOfDay;
+
+            // OPTION RECOMMANDEE : clamp pour éviter les gros sauts visuels du ciel
+            long dtForTime = Math.min(deltaMillis, MAX_DT_FOR_TIME_MS);
+            lastDeltaMillisClamped = dtForTime;
+
+            timeOfDay += dtForTime * BASE_SPEED * debugSpeedMultiplier;
             if (timeOfDay > 1.0f) timeOfDay -= 1.0f;
+
+            lastTimeAfter = timeOfDay;
+        } else {
+            lastTimeBefore = timeOfDay;
+            lastTimeAfter  = timeOfDay;
+            lastDeltaMillisClamped = 0;
         }
-        // FPS tracking
+        lastDeltaSecondsClamped = lastDeltaMillisClamped / 1000.0f;
+
+        // FPS tracking (inchangé)
         frames++;
         long now = System.currentTimeMillis();
         if (now - lastFpsTime >= 1000) {
@@ -35,14 +60,39 @@ public class TimeManager {
             frames = 0;
             lastFpsTime = now;
         }
+        /*
+        if (deltaMillis > 60) {
+            System.out.println("[TIME SPIKE] dt=" + deltaMillis
+                + "ms dtClamped=" + lastDeltaMillisClamped
+                + " timeBefore=" + lastTimeBefore
+                + " timeAfter=" + lastTimeAfter
+                + " dTime=" + (lastTimeAfter - lastTimeBefore)
+                + " paused=" + paused
+                + " speed=" + debugSpeedMultiplier);
+        }
+        */
     }
 
     /**
      * Get raw sun data with continuous (unfiltered) sun direction.
      * Use this for lighting, sky rendering, and visual effects.
      */
-    public SunData getSunData(){
-        float t = timeOfDay;
+    public SunData getSunData() {
+        return getSunDataAtTimeOfDay(timeOfDay);
+    }
+
+    /**
+     * Get sun data at a specific time of day (pure function).
+     * Used for predicting future sun positions in leapfrog shadow system.
+     *
+     * @param t Time of day in [0, 1) range (wraps automatically)
+     * @return SunData with sun direction and Y component
+     */
+    public SunData getSunDataAtTimeOfDay(float t) {
+        // Normalize t to [0, 1) range
+        t = t % 1.0f;
+        if (t < 0) t += 1.0f;
+
         t = (t + 0.25f) % 1.0f;
         float angle = (float) (2 * Math.PI * (t - 0.25));
 
@@ -51,6 +101,16 @@ public class TimeManager {
         float sunX = (float) Math.cos(angle);
         Vector3f sunDir = new Vector3f(sunX, sunY, 0.2f).normalize();
         return new SunData(sunDir, sunY);
+    }
+
+    /**
+     * Get the day/night cycle period in seconds.
+     * Used by leapfrog shadow system to convert time offsets to timeOfDay deltas.
+     *
+     * @return Period in seconds for one complete day/night cycle (600s = 10 minutes)
+     */
+    public float getDayNightPeriodSec() {
+        return DAY_NIGHT_PERIOD_SEC;
     }
 
     /**
@@ -132,4 +192,10 @@ public class TimeManager {
     public void setDebugSpeedMultiplier(float multiplier) {
         this.debugSpeedMultiplier = multiplier;
     }
+
+    public long  getLastDeltaMillis()         { return lastDeltaMillis; }
+    public long  getLastDeltaMillisClamped()  { return lastDeltaMillisClamped; }
+    public float getLastDeltaSecondsClamped() { return lastDeltaSecondsClamped; }
+    public float getLastTimeBefore()          { return lastTimeBefore; }
+    public float getLastTimeAfter()           { return lastTimeAfter; }
 }
