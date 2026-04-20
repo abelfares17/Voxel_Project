@@ -170,6 +170,46 @@ public class GameConfig {
     public static final boolean DEBUG_FRAMEBUFFER_SIZE = true;
 
 
+    // === TEST HARNESS ===
+
+    /**
+     * Master switch: Enable automated testing harness.
+     * When true:
+     * - Bypasses menu and loads directly into PlayingState
+     * - Loads a deterministic test world (TEST_WORLD_NAME)
+     * - Forces spawn position/orientation to eliminate drift
+     * - Runs automated movement scenario
+     * - Logs performance metrics to CSV
+     * When false: normal game behavior (unchanged)
+     */
+    public static final boolean TEST_HARNESS_ENABLED = false;
+
+    /** Name of the test world to load when harness is enabled */
+    public static final String TEST_WORLD_NAME = "World 10";
+
+    /** Forced spawn position for deterministic testing (X, Y, Z in blocks) */
+    public static final org.joml.Vector3f TEST_FORCE_SPAWN_POS = new org.joml.Vector3f(0.5f, 100f, 0.5f);
+
+    /** Forced spawn yaw angle (degrees) */
+    public static final float TEST_FORCE_SPAWN_YAW = 0.0f;
+
+    /** Forced spawn pitch angle (degrees) */
+    public static final float TEST_FORCE_SPAWN_PITCH = 0.0f;
+
+    /** Duration of automated test scenario (seconds) */
+    public static final float TEST_SCENARIO_DURATION = 20.0f;
+
+    /** Performance logging frequency (1 = every frame, 10 = every 10th frame) */
+    public static final int TEST_LOG_FREQUENCY = 1;
+
+    /**
+     * Insert a glFinish after ShadowRenderer.render() to measure shadow pass GPU time separately.
+     * WARNING: breaks GPU pipelining → artificially increases total frame time.
+     * Set to true ONLY for hypothesis 6.3 isolation test (C3), false in production.
+     */
+    public static final boolean SHADOW_SPLIT_TIMING = false;
+
+
     // === PRIVATE CONSTRUCTOR ===
 
     /**

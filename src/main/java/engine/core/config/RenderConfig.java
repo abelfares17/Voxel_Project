@@ -100,6 +100,40 @@ public class RenderConfig {
 
     // === CASCADED SHADOW MAPPING (CSM) ===
 
+    /** Master shadow switch. false = shadowsEnabled uniform = 0 (no fetches), true = normal. */
+    public static boolean SHADOWS_ENABLED = true;
+
+    /**
+     * Skip the GPU shadow depth pass entirely (ShadowRenderer.render() returns immediately).
+     * The atlas retains its previous content (stale depths = fully lit = ok for perf isolation).
+     * PERF TEST ONLY — hypothesis 6.3 experiment C1. Default: true (normal operation).
+     */
+    public static boolean SHADOW_DEPTH_PASS_ENABLED = true;
+
+    /**
+     * Shadow atlas min/mag filter mode.
+     * 0 = GL_LINEAR (default — current production setting)
+     * 1 = GL_NEAREST
+     * Change requires restart (texture is created once at init).
+     */
+    public static int SHADOW_MAP_FILTER = 0;
+
+    /**
+     * Shadow atlas internal depth format.
+     * 0 = GL_DEPTH_COMPONENT32F (default)
+     * 1 = GL_DEPTH_COMPONENT24
+     * 2 = GL_DEPTH_COMPONENT16
+     * Change requires restart. FBO completeness is checked; falls back to 32F if unsupported.
+     */
+    public static int SHADOW_MAP_FORMAT = 0;
+
+    /**
+     * Force GL_TEXTURE_BASE_LEVEL=0 and GL_TEXTURE_MAX_LEVEL=0 on the shadow atlas.
+     * Prevents any mipmap stack allocation (depth arrays have 1 level anyway, but explicit is safer).
+     * Change requires restart.
+     */
+    public static boolean SHADOW_BASE_MAX_LEVEL = false;
+
     /** Number of shadow cascades (2-6 supported, 3 is typical) */
     public static final int CSM_CASCADE_COUNT = 3;
 

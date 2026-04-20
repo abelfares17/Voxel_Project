@@ -4,6 +4,7 @@ import static org.lwjgl.glfw.GLFW.GLFW_CURSOR;
 import static org.lwjgl.glfw.GLFW.GLFW_CURSOR_DISABLED;
 import static org.lwjgl.glfw.GLFW.GLFW_CURSOR_NORMAL;
 import static org.lwjgl.glfw.GLFW.glfwSetInputMode;
+import static org.lwjgl.glfw.GLFW.glfwSetWindowShouldClose;
 
 import engine.Game;
 import engine.core.Application;
@@ -18,8 +19,11 @@ import engine.render.renderer.ShadowRenderer;
 import engine.render.renderer.SkyRenderer;
 import engine.render.renderer.SunRenderer;
 import engine.render.renderer.VoxelRenderer;
+import engine.test.PerfLogger;
+import engine.test.TestHarness;
 import engine.time.TimeManager;
 import engine.world.World;
+import org.joml.Vector3f;
 
 /**
  * Playing state - Main gameplay.
@@ -43,6 +47,12 @@ public class PlayingState implements GameState {
     private VoxelRenderer voxelRenderer;
     private Shader voxelShader;
     private Shader depthShader;
+
+    // Test harness (only active if GameConfig.TEST_HARNESS_ENABLED)
+    private TestHarness testHarness;
+    private PerfLogger perfLogger;
+    private int frameIndex = 0;
+    private String cachedPerfBisectStage = "";
 
     public PlayingState(Application app, RenderContext renderContext, Input input) {
         this.app = app;
@@ -125,11 +135,79 @@ public class PlayingState implements GameState {
 
         game.setWinDim(app.getWindowWidth(), app.getWindowHeight());
         game.setAspect((float) app.getWindowWidth() / app.getWindowHeight());
+
+        // Initialize test harness (if enabled)
+        if (GameConfig.TEST_HARNESS_ENABLED) {
+            testHarness = new TestHarness();
+            testHarness.beginRun(game, world, game.getPlayer(), (engine.render.camera.PerspectiveCamera) renderContext.getCamera());
+
+            // Extract PERF_BISECT_STAGE from shader source for CSV labeling
+            cachedPerfBisectStage = extractPerfBisectStage();
+
+            try {
+                perfLogger = new PerfLogger(world.getWorldName(), GameConfig.TEST_LOG_FREQUENCY);
+            } catch (java.io.IOException e) {
+                System.err.println("Failed to create PerfLogger: " + e.getMessage());
+                e.printStackTrace();
+            }
+
+            frameIndex = 0;
+        }
     }
 
     @Override
     public void update(float deltaTime) {
+        // Run test harness automation (if enabled)
+        if (GameConfig.TEST_HARNESS_ENABLED && testHarness != null) {
+            testHarness.update(deltaTime);
+            // Auto-close window when scenario is complete
+            if (testHarness.isRunCompleted()) {
+                System.out.println("[TEST HARNESS] Scenario complete - closing window.");
+                glfwSetWindowShouldClose(app.getWindow(), true);
+            }
+        }
+
         game.update(deltaTime);
+
+        // Log performance metrics (if enabled)
+        if (GameConfig.TEST_HARNESS_ENABLED && perfLogger != null) {
+            frameIndex++;
+
+            // Get player position and camera orientation
+            Vector3f playerPos = game.getPlayer().getPosition();
+            float yaw = game.getPlayer().getYaw();
+            float pitch = game.getPlayer().getPitch();
+
+            // Calculate instantaneous FPS
+            float fpsInstant = deltaTime > 0 ? (1.0f / deltaTime) : 0f;
+
+            // Get renderer state (for diagnostic columns)
+            boolean shadowPassEnabled = true; // Shadow renderer always runs
+            boolean leapfrogEnabled = shadowRenderer != null && shadowRenderer.isLeapfrogEnabled();
+            int debugShadowMode = voxelRenderer != null ? voxelRenderer.getDebugShadow() : 0;
+
+            // Log frame metrics
+            perfLogger.logFrame(
+                frameIndex,
+                deltaTime,
+                renderContext.getUpdateMs(),
+                renderContext.getRenderMs(),
+                renderContext.getSwapMs(),
+                renderContext.getGlFinishMs(),
+                renderContext.getShadowFinishMs(),
+                fpsInstant,
+                renderContext.getFpsReal(),
+                playerPos,
+                yaw,
+                pitch,
+                0, // visibleChunks (TODO: add if available)
+                0, // renderedVertices (TODO: add if available)
+                shadowPassEnabled,
+                leapfrogEnabled,
+                debugShadowMode,
+                cachedPerfBisectStage
+            );
+        }
     }
 
     @Override
@@ -144,10 +222,20 @@ public class PlayingState implements GameState {
         // Release cursor
         glfwSetInputMode(app.getWindow(), GLFW_CURSOR, GLFW_CURSOR_NORMAL);
 
-        // Save player and world
+        // Close performance logger (if test harness is enabled)
+        if (GameConfig.TEST_HARNESS_ENABLED && perfLogger != null) {
+            perfLogger.close();
+            perfLogger = null;
+        }
+
+        // Save player and world (skip in test harness mode to prevent drift)
         if (game != null && world != null) {
-            world.getStorage().savePlayer(game.getPlayer());
-            world.save();
+            if (!GameConfig.TEST_HARNESS_ENABLED) {
+                world.getStorage().savePlayer(game.getPlayer());
+                world.save();
+            } else {
+                System.out.println("Test harness: Skipping player/world save to prevent drift");
+            }
         }
 
         // Cleanup renderers
@@ -204,5 +292,20 @@ public class PlayingState implements GameState {
 
     public Game getGame() {
         return game;
+    }
+
+    /** Read #define PERF_BISECT_STAGE N from the shader source at classpath. */
+    private String extractPerfBisectStage() {
+        try (java.io.InputStream is = getClass().getClassLoader()
+                .getResourceAsStream(GameConfig.VOXEL_FRAGMENT_SHADER)) {
+            if (is == null) return "?";
+            String src = new String(is.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
+            java.util.regex.Matcher m = java.util.regex.Pattern
+                    .compile("#define\\s+PERF_BISECT_STAGE\\s+(\\d+)")
+                    .matcher(src);
+            return m.find() ? m.group(1) : "?";
+        } catch (Exception e) {
+            return "?";
+        }
     }
 }

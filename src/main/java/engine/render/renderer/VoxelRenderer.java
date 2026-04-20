@@ -7,6 +7,7 @@ import static org.lwjgl.opengl.GL11.GL_BLEND;
 import static org.lwjgl.opengl.GL11.GL_CCW;
 import static org.lwjgl.opengl.GL11.GL_CULL_FACE;
 import static org.lwjgl.opengl.GL11.GL_DEPTH_TEST;
+import static org.lwjgl.opengl.GL11.GL_LEQUAL;
 import static org.lwjgl.opengl.GL11.GL_LESS;
 import static org.lwjgl.opengl.GL11.GL_NO_ERROR;
 import static org.lwjgl.opengl.GL11.GL_SCISSOR_TEST;
@@ -20,10 +21,16 @@ import static org.lwjgl.opengl.GL11.glDisable;
 import static org.lwjgl.opengl.GL11.glEnable;
 import static org.lwjgl.opengl.GL11.glFrontFace;
 import static org.lwjgl.opengl.GL11.glGetError;
+import static org.lwjgl.opengl.GL11.glTexParameteri;
 import static org.lwjgl.opengl.GL11.glViewport;
 import static org.lwjgl.opengl.GL13.GL_TEXTURE0;
 import static org.lwjgl.opengl.GL13.glActiveTexture;
+import static org.lwjgl.opengl.GL14.GL_COMPARE_R_TO_TEXTURE;
+import static org.lwjgl.opengl.GL14.GL_TEXTURE_COMPARE_FUNC;
+import static org.lwjgl.opengl.GL14.GL_TEXTURE_COMPARE_MODE;
+import static org.lwjgl.opengl.GL11.GL_NONE;
 import static org.lwjgl.opengl.GL30.GL_FRAMEBUFFER;
+import static org.lwjgl.opengl.GL30.GL_TEXTURE_2D_ARRAY;
 import static org.lwjgl.opengl.GL30.glBindFramebuffer;
 
 import engine.core.config.GameConfig;
@@ -189,19 +196,42 @@ public class VoxelRenderer implements Renderer {
         glBindTexture(GL_TEXTURE_2D, atlasTextureId);
         voxelShader.setUniform("textureSampler", 0);
 
-        // Bind shadow map arrays
-        int primaryShadowMap = shadowRenderer.getPrimaryShadowMapArray();
-        voxelShader.setTextureArray("shadowMapArray", primaryShadowMap, 1);
+        // Master shadow switch (shader uses this to skip fetches without changing bindings)
+        voxelShader.setUniform("shadowsEnabled", RenderConfig.SHADOWS_ENABLED ? 1 : 0);
 
-        int secondaryShadowMap = leapfrogTransitioning ?
-            shadowRenderer.getSecondaryShadowMapArray() : primaryShadowMap;
-        voxelShader.setTextureArray("shadowMapArrayB", secondaryShadowMap, 2);
+        // Unified shadow atlas (A+B in one sampler2DArray — unit 1)
+        voxelShader.setTextureArray("shadowAtlas", shadowRenderer.getShadowAtlas(), 1);
+
+        // Atlas offsets: tell shader which half of the atlas is A and which is B
+        voxelShader.setUniform("atlasOffsetA", shadowRenderer.getAtlasOffsetA());
+        voxelShader.setUniform("atlasOffsetB", shadowRenderer.getAtlasOffsetB());
+
+        // Bind GL_R32F color test array (micro-test A — texture unit 2)
+        voxelShader.setTextureArray("colorTestArray", shadowRenderer.getColorTestArray(), 2);
+
+        // Hardware shadow compare (micro-tests stages 14-15 only).
+        // We temporarily set GL_COMPARE_REF_TO_TEXTURE on the atlas, bind it on unit 3
+        // as shadowAtlasShadow, then restore GL_NONE after rendering.
+        // This is safe: the shadow depth pass never reads the atlas.
+        int atlasId = shadowRenderer.getShadowAtlas();
+        glActiveTexture(GL_TEXTURE0 + 3);
+        glBindTexture(GL_TEXTURE_2D_ARRAY, atlasId);
+        glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_COMPARE_MODE, GL_COMPARE_R_TO_TEXTURE);
+        glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_COMPARE_FUNC, GL_LEQUAL);
+        voxelShader.setUniform("shadowAtlasShadow", 3);
+        glActiveTexture(GL_TEXTURE0);
 
         // Upload pending meshes
         context.getWorld().getMeshManager().uploadMeshesIfAny();
 
         // Render chunks
         renderVisibleChunks(context);
+
+        // Restore GL_NONE compare mode on the atlas (required for manual depth reads in other stages)
+        glActiveTexture(GL_TEXTURE0 + 3);
+        glBindTexture(GL_TEXTURE_2D_ARRAY, atlasId);
+        glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_COMPARE_MODE, GL_NONE);
+        glActiveTexture(GL_TEXTURE0);
 
         voxelShader.unbind();
     }

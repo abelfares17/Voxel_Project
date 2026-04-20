@@ -1,10 +1,11 @@
 package engine.entity;
 
+import org.joml.Vector3f;
+
 import engine.core.config.GameConfig;
 import engine.input.Input;
 import engine.physics.PhysicsEngine;
 import engine.world.Chunk;
-import org.joml.Vector3f;
 
 /**
  * Player entity with input handling and camera control.
@@ -156,6 +157,10 @@ public class Player extends Entity {
                 transform.getY() + vy,
                 transform.getZ() + vz
         );
+    }
+
+    public Vector3f getPosition() {
+        return new Vector3f(transform.getX(), transform.getY(), transform.getZ());
     }
 
     // Spectator mode

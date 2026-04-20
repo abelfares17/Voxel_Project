@@ -22,6 +22,8 @@ import static org.lwjgl.glfw.GLFW.GLFW_KEY_P;
 import static org.lwjgl.glfw.GLFW.GLFW_MOUSE_BUTTON_LEFT;
 import static org.lwjgl.glfw.GLFW.glfwSetInputMode;
 
+import static org.lwjgl.opengl.GL11.glFinish;
+
 import engine.core.config.GameConfig;
 import engine.core.config.RenderConfig;
 import engine.entity.Player;
@@ -73,10 +75,23 @@ public class Game {
 
         this.physicsEngine = new PhysicsEngine();
 
+        // Spawn position (test harness overrides this later)
         float spawnY = world.getSpawnY() + 2f;
         this.player = new Player(0.5f, spawnY, 0.5f, physicsEngine);
 
-        world.getStorage().loadPlayer(player);
+        // Load player position from save (unless in test harness mode)
+        if (!GameConfig.TEST_HARNESS_ENABLED) {
+            world.getStorage().loadPlayer(player);
+        } else {
+            // Test harness: Use deterministic spawn position
+            Vector3f spawnPos = GameConfig.TEST_FORCE_SPAWN_POS;
+            player.setPosition(spawnPos.x, spawnPos.y, spawnPos.z);
+            player.setYaw(GameConfig.TEST_FORCE_SPAWN_YAW);
+            player.setPitch(GameConfig.TEST_FORCE_SPAWN_PITCH);
+            System.out.println("Test harness: Player spawned at " + spawnPos +
+                             " (yaw=" + GameConfig.TEST_FORCE_SPAWN_YAW +
+                             ", pitch=" + GameConfig.TEST_FORCE_SPAWN_PITCH + ")");
+        }
 
         this.camera = new PerspectiveCamera(
                 RenderConfig.CAMERA_FOV,
@@ -93,8 +108,12 @@ public class Game {
         this.textRenderer = textRenderer;
 
         this.lastTime = System.currentTimeMillis();
-        this.player.setYaw(0f);
-        this.player.setPitch(0f);
+
+        // Set initial camera angles (if not already set by test harness)
+        if (!GameConfig.TEST_HARNESS_ENABLED) {
+            this.player.setYaw(0f);
+            this.player.setPitch(0f);
+        }
     }
 
     public void setAspect(float aspect) {
@@ -244,6 +263,17 @@ public class Game {
 
         // Render pipeline
         shadowRenderer.render(context);
+
+        // Per-pass timing: glFinish after shadow pass to isolate shadow GPU cost.
+        // WARNING: breaks GPU pipelining → artificially inflates total frame time.
+        // Only active when SHADOW_SPLIT_TIMING=true (hypothesis 6.3 test C3).
+        if (GameConfig.SHADOW_SPLIT_TIMING) {
+            long tShadow0 = System.nanoTime();
+            glFinish();
+            long tShadow1 = System.nanoTime();
+            context.setShadowFinishMs((tShadow1 - tShadow0) / 1e6);
+        }
+
         skyRenderer.render(context);
         sunRenderer.render(context);
         voxelRenderer.render(context);

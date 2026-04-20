@@ -13,13 +13,18 @@ import static org.lwjgl.opengl.GL30.*;
 
 public class Shader {
     private final int programId;
+    private final String vertexPath;
+    private final String fragmentPath;
 
     public Shader(String vertexPath, String fragmentPath) {
+        this.vertexPath = vertexPath;
+        this.fragmentPath = fragmentPath;
+
         String vertSrc = readFile(vertexPath);
         String fragSrc = readFile(fragmentPath);
 
-        int vertId = compileShader(vertSrc, GL_VERTEX_SHADER);
-        int fragId = compileShader(fragSrc, GL_FRAGMENT_SHADER);
+        int vertId = compileShader(vertSrc, GL_VERTEX_SHADER, vertexPath);
+        int fragId = compileShader(fragSrc, GL_FRAGMENT_SHADER, fragmentPath);
 
         programId = glCreateProgram();
         glAttachShader(programId, vertId);
@@ -34,7 +39,8 @@ public class Shader {
         glLinkProgram(programId);
         if (glGetProgrami(programId, GL_LINK_STATUS) == GL_FALSE) {
             String log = glGetProgramInfoLog(programId);
-            throw new RuntimeException("Shader linking failed:\n" + log);
+            throw new ShaderCompilationException("LINK",
+                vertexPath + " + " + fragmentPath, log);
         }
 
         // On peut supprimer les objets shader compilés
@@ -56,14 +62,14 @@ public class Shader {
         }
     }
 
-    private int compileShader(String src, int type) {
+    private int compileShader(String src, int type, String shaderPath) {
         int id = glCreateShader(type);
         glShaderSource(id, src);
         glCompileShader(id);
         if (glGetShaderi(id, GL_COMPILE_STATUS) == GL_FALSE) {
             String log = glGetShaderInfoLog(id);
             String typeName = (type == GL_VERTEX_SHADER ? "VERTEX" : "FRAGMENT");
-            throw new RuntimeException(typeName + " shader compile error:\n" + log);
+            throw new ShaderCompilationException(typeName, shaderPath, log);
         }
         return id;
     }

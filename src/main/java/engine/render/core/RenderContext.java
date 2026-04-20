@@ -41,6 +41,16 @@ public class RenderContext {
     private float timeOfDay = 0;
 
     // ═══════════════════════════════════════════════════════════════════════════
+    // PERFORMANCE TIMING DATA (for test harness)
+    // ═══════════════════════════════════════════════════════════════════════════
+    // Frame-level timing data populated by Application.loop() for performance logging
+    private double updateMs = 0;
+    private double renderMs = 0;
+    private double swapMs = 0;
+    private double glFinishMs = 0;
+    private double shadowFinishMs = 0;
+
+    // ═══════════════════════════════════════════════════════════════════════════
     // SKY CLEAR DIAGNOSTICS
     // ═══════════════════════════════════════════════════════════════════════════
     // Tracks what SkyRenderer actually did this frame (for debug logging)
@@ -210,4 +220,38 @@ public class RenderContext {
     public float getSkyClearColorA() { return skyClearColorA; }
     public boolean isSkyClearedColor() { return skyClearedColor; }
     public boolean isSkyClearedDepth() { return skyClearedDepth; }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // PERFORMANCE TIMING ACCESSORS
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    /** Get update time for current frame (milliseconds). */
+    public double getUpdateMs() { return updateMs; }
+
+    /** Set update time for current frame (milliseconds). */
+    public void setUpdateMs(double updateMs) { this.updateMs = updateMs; }
+
+    /** Get render time for current frame (milliseconds). */
+    public double getRenderMs() { return renderMs; }
+
+    /** Set render time for current frame (milliseconds). */
+    public void setRenderMs(double renderMs) { this.renderMs = renderMs; }
+
+    /** Get swap buffers time for current frame (milliseconds). */
+    public double getSwapMs() { return swapMs; }
+
+    /** Set swap buffers time for current frame (milliseconds). */
+    public void setSwapMs(double swapMs) { this.swapMs = swapMs; }
+
+    /** Get glFinish time for current frame (milliseconds). */
+    public double getGlFinishMs() { return glFinishMs; }
+
+    /** Set glFinish time for current frame (milliseconds). */
+    public void setGlFinishMs(double glFinishMs) { this.glFinishMs = glFinishMs; }
+
+    /** Get glFinish time measured after shadow pass only (milliseconds). 0 when SHADOW_SPLIT_TIMING=false. */
+    public double getShadowFinishMs() { return shadowFinishMs; }
+
+    /** Set glFinish time after shadow pass (milliseconds). Set by Game.render() when SHADOW_SPLIT_TIMING=true. */
+    public void setShadowFinishMs(double shadowFinishMs) { this.shadowFinishMs = shadowFinishMs; }
 }

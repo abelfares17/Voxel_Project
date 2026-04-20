@@ -26,6 +26,7 @@ import static org.lwjgl.glfw.GLFW.glfwSetFramebufferSizeCallback;
 import static org.lwjgl.glfw.GLFW.glfwSetInputMode;
 import static org.lwjgl.glfw.GLFW.glfwSetKeyCallback;
 import static org.lwjgl.glfw.GLFW.glfwSetWindowPos;
+import static org.lwjgl.glfw.GLFW.glfwSetWindowShouldClose;
 import static org.lwjgl.glfw.GLFW.glfwShowWindow;
 import static org.lwjgl.glfw.GLFW.glfwSwapBuffers;
 import static org.lwjgl.glfw.GLFW.glfwSwapInterval;
@@ -44,6 +45,7 @@ import static org.lwjgl.opengl.GL11.glViewport;
 import static org.lwjgl.opengl.GL30.GL_FRAMEBUFFER_SRGB;
 
 import engine.core.config.GameConfig;
+import engine.core.states.LoadingState;
 import engine.core.states.MenuState;
 import engine.core.states.PlayingState;
 import engine.input.Input;
@@ -180,8 +182,23 @@ public class Application {
             }
         });
 
-        // Initialize state manager with MenuState
-        stateManager = new StateManager(new MenuState(this, renderContext, input));
+        // Initialize state manager with test harness or menu
+        if (GameConfig.TEST_HARNESS_ENABLED) {
+            // TEST MODE: Skip menu, load test world directly
+            System.out.println("═══════════════════════════════════════════════════════════");
+            System.out.println("TEST HARNESS MODE ENABLED");
+            System.out.println("═══════════════════════════════════════════════════════════");
+            System.out.println("Loading test world: " + GameConfig.TEST_WORLD_NAME);
+            System.out.println("═══════════════════════════════════════════════════════════");
+
+            // Create LoadingState for test world
+            stateManager = new StateManager(
+                new LoadingState(this, renderContext, input, GameConfig.TEST_WORLD_NAME)
+            );
+        } else {
+            // NORMAL MODE: Start with menu
+            stateManager = new StateManager(new MenuState(this, renderContext, input));
+        }
 
         lastFrameTime = System.currentTimeMillis();
     }
@@ -191,53 +208,85 @@ public class Application {
      */
     private void loop() {
         while (!glfwWindowShouldClose(window)) {
-            glfwPollEvents();
-            input.update();
+            try {
+                glfwPollEvents();
+                input.update();
 
-            // Calculate delta time
-            long currentTime = System.currentTimeMillis();
-            float deltaTime = (currentTime - lastFrameTime) / 1000.0f;
-            lastFrameTime = currentTime;
-            
-            long t0 = System.nanoTime();
-            // Update current state
-            long tUpdate0 = System.nanoTime();
-            stateManager.update(deltaTime);
-            long tUpdate1 = System.nanoTime();
+                // Calculate delta time
+                long currentTime = System.currentTimeMillis();
+                float deltaTime = (currentTime - lastFrameTime) / 1000.0f;
+                lastFrameTime = currentTime;
 
-            // Render current state (and time it)
-            long tRender0 = System.nanoTime();
-            renderContext.beginFrame(deltaTime);
-            renderContext.setFpsReal(fpsReal);
-            stateManager.render(renderContext);
-            long tRender1 = System.nanoTime();
+                long t0 = System.nanoTime();
 
-            //Synchronize GPU and CPU to get accurate timing for swap buffers
-            long tF0 = System.nanoTime();
-            glFinish();
-            long tF1 = System.nanoTime();
+                // Update current state (with exception handling)
+                long tUpdate0 = System.nanoTime();
+                try {
+                    stateManager.update(deltaTime);
+                } catch (Throwable t) {
+                    CrashHandler.fatal("State Update", t);
+                    glfwSetWindowShouldClose(window, true);
+                    break;
+                }
+                long tUpdate1 = System.nanoTime();
 
-            // Swap buffers and time it
-            long tSwap0 = System.nanoTime();
-            glfwSwapBuffers(window);
-            long tSwap1 = System.nanoTime();
+                // Render current state (with exception handling)
+                long tRender0 = System.nanoTime();
+                try {
+                    renderContext.beginFrame(deltaTime);
+                    renderContext.setFpsReal(fpsReal);
+                    stateManager.render(renderContext);
+                } catch (Throwable t) {
+                    CrashHandler.fatal("State Render", t);
+                    glfwSetWindowShouldClose(window, true);
+                    break;
+                }
+                long tRender1 = System.nanoTime();
 
-            long t1 = System.nanoTime();
-            if (stateManager.getCurrentState() instanceof PlayingState) {
+                // Synchronize GPU and CPU to get accurate timing for swap buffers
+                long tF0 = System.nanoTime();
+                glFinish();
+                long tF1 = System.nanoTime();
+
+                // Swap buffers and time it
+                long tSwap0 = System.nanoTime();
+                glfwSwapBuffers(window);
+                long tSwap1 = System.nanoTime();
+
+                long t1 = System.nanoTime();
+
+                // Calculate timing metrics
                 double msUpdate = (tUpdate1 - tUpdate0) / 1e6;
                 double msRender = (tRender1 - tRender0) / 1e6;
                 double msSwap   = (tSwap1   - tSwap0) / 1e6;
                 double msFrame  = (t1 - t0) / 1e6;
-                double msFinish = (tF1 - tF0)/1e6;
-                System.out.printf("Frame time: %.2f ms (update=%.2f ms, render=%.2f ms, glfinish=%.2fms, swap=%.2f ms)%n",
-                    msFrame, msUpdate, msRender, msFinish, msSwap);
-            }
-            fpsFrames++;
-            double t = org.lwjgl.glfw.GLFW.glfwGetTime();
-            if (t - fpsT0 >= 1.0) {
-                fpsReal = fpsFrames;
-                fpsFrames = 0;
-                fpsT0 = t;
+                double msFinish = (tF1 - tF0) / 1e6;
+
+                // Store timing data in RenderContext for PerfLogger
+                renderContext.setUpdateMs(msUpdate);
+                renderContext.setRenderMs(msRender);
+                renderContext.setSwapMs(msSwap);
+                renderContext.setGlFinishMs(msFinish);
+
+                // Console logging (only in PlayingState, not in test mode)
+                if (!GameConfig.TEST_HARNESS_ENABLED && stateManager.getCurrentState() instanceof PlayingState) {
+                    System.out.printf("Frame time: %.2f ms (update=%.2f ms, render=%.2f ms, glfinish=%.2fms, swap=%.2f ms)%n",
+                        msFrame, msUpdate, msRender, msFinish, msSwap);
+                }
+
+                fpsFrames++;
+                double t = org.lwjgl.glfw.GLFW.glfwGetTime();
+                if (t - fpsT0 >= 1.0) {
+                    fpsReal = fpsFrames;
+                    fpsFrames = 0;
+                    fpsT0 = t;
+                }
+
+            } catch (Throwable t) {
+                // Catch-all for any unexpected errors in the main loop
+                CrashHandler.fatal("Main Loop", t);
+                glfwSetWindowShouldClose(window, true);
+                break;
             }
         }
     }
