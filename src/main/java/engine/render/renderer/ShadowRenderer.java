@@ -1,60 +1,15 @@
 package engine.render.renderer;
 
 import org.joml.Matrix4f;
+import org.joml.FrustumIntersection;
 import org.joml.Vector3f;
-import static org.lwjgl.opengl.GL11.GL_BACK;
-import static org.lwjgl.opengl.GL11.GL_BLEND;
-import static org.lwjgl.opengl.GL11.GL_CULL_FACE;
-import static org.lwjgl.opengl.GL11.GL_DEPTH_BUFFER_BIT;
-import static org.lwjgl.opengl.GL11.GL_DEPTH_COMPONENT;
-import static org.lwjgl.opengl.GL11.GL_DEPTH_TEST;
-import static org.lwjgl.opengl.GL11.GL_FLOAT;
-import static org.lwjgl.opengl.GL11.GL_LESS;
-import static org.lwjgl.opengl.GL11.GL_LINEAR;
-import static org.lwjgl.opengl.GL11.GL_NEAREST;
-import static org.lwjgl.opengl.GL11.GL_NONE;
-import static org.lwjgl.opengl.GL11.GL_NO_ERROR;
-import static org.lwjgl.opengl.GL11.GL_SCISSOR_TEST;
-import static org.lwjgl.opengl.GL11.GL_TEXTURE_MAG_FILTER;
-import static org.lwjgl.opengl.GL11.GL_TEXTURE_MIN_FILTER;
-import static org.lwjgl.opengl.GL11.GL_TEXTURE_WRAP_S;
-import static org.lwjgl.opengl.GL11.GL_TEXTURE_WRAP_T;
-import static org.lwjgl.opengl.GL11.glBindTexture;
-import static org.lwjgl.opengl.GL11.glClear;
-import static org.lwjgl.opengl.GL11.glClearDepth;
-import static org.lwjgl.opengl.GL11.glColorMask;
-import static org.lwjgl.opengl.GL11.glCullFace;
-import static org.lwjgl.opengl.GL11.glDeleteTextures;
-import static org.lwjgl.opengl.GL11.glDepthFunc;
-import static org.lwjgl.opengl.GL11.glDepthMask;
-import static org.lwjgl.opengl.GL11.glDisable;
-import static org.lwjgl.opengl.GL11.glDrawBuffer;
-import static org.lwjgl.opengl.GL11.glEnable;
-import static org.lwjgl.opengl.GL11.glGenTextures;
-import static org.lwjgl.opengl.GL11.glGetError;
-import static org.lwjgl.opengl.GL11.glReadBuffer;
-import static org.lwjgl.opengl.GL11.glTexParameteri;
-import static org.lwjgl.opengl.GL11.glViewport;
-import static org.lwjgl.opengl.GL12.GL_CLAMP_TO_EDGE;
-import static org.lwjgl.opengl.GL12.GL_TEXTURE_BASE_LEVEL;
-import static org.lwjgl.opengl.GL12.GL_TEXTURE_MAX_LEVEL;
-import static org.lwjgl.opengl.GL12.glTexImage3D;
-import static org.lwjgl.opengl.GL14.GL_DEPTH_COMPONENT16;
-import static org.lwjgl.opengl.GL14.GL_DEPTH_COMPONENT24;
-import static org.lwjgl.opengl.GL13.GL_TEXTURE0;
-import static org.lwjgl.opengl.GL13.glActiveTexture;
-import static org.lwjgl.opengl.GL14.GL_TEXTURE_COMPARE_MODE;
-import static org.lwjgl.opengl.GL30.GL_DEPTH_ATTACHMENT;
-import static org.lwjgl.opengl.GL30.GL_DEPTH_COMPONENT32F;
-import static org.lwjgl.opengl.GL30.GL_FRAMEBUFFER;
-import static org.lwjgl.opengl.GL30.GL_FRAMEBUFFER_COMPLETE;
-import static org.lwjgl.opengl.GL30.GL_R32F;
-import static org.lwjgl.opengl.GL30.GL_TEXTURE_2D_ARRAY;
-import static org.lwjgl.opengl.GL30.glBindFramebuffer;
-import static org.lwjgl.opengl.GL30.glCheckFramebufferStatus;
-import static org.lwjgl.opengl.GL30.glDeleteFramebuffers;
-import static org.lwjgl.opengl.GL30.glFramebufferTextureLayer;
-import static org.lwjgl.opengl.GL30.glGenFramebuffers;
+import java.nio.FloatBuffer;
+import org.lwjgl.system.MemoryUtil;
+import static org.lwjgl.opengl.GL11.*;
+import static org.lwjgl.opengl.GL12.*;
+import static org.lwjgl.opengl.GL13.*;
+import static org.lwjgl.opengl.GL14.*;
+import static org.lwjgl.opengl.GL30.*;
 
 import engine.core.config.RenderConfig;
 import engine.render.Shader;
@@ -76,9 +31,15 @@ import engine.time.SunData;
  */
 public class ShadowRenderer implements Renderer {
 
-    private final int fbo;
+    private int fbo;
     private final Shader depthShader;
     private final CSMCalculator csmCalculator;
+    private final FrustumIntersection lightFrustum = new FrustumIntersection();
+    // Expensive correctness test only: never enable during a performance run.
+    private final boolean validateCulling = Boolean.getBoolean("voxel.validateShadowCulling");
+    private float validationElapsed;
+    private float nextValidation;
+    private boolean validateThisFrame;
 
     // ═══════════════════════════════════════════════════════════════════════════
     // SHADOW MAP TEXTURES
@@ -157,7 +118,7 @@ public class ShadowRenderer implements Renderer {
     private enum LeapState { OFF, WARMUP, RUNNING }
 
     private LeapState leapState = LeapState.WARMUP;
-    private boolean leapfrogEnabled = true;
+    private boolean leapfrogEnabled = RenderConfig.LEAPFROG_SHADOWS_ENABLED;
 
     // ═══════════════════════════════════════════════════════════════════════════
     // TIMING CONFIGURATION
@@ -219,11 +180,15 @@ public class ShadowRenderer implements Renderer {
         // Unified atlas for A+B (cascadeCount*2 layers)
         shadowAtlas = createShadowMapArray(cascadeCount * 2, shadowMapSize);
 
-        // Separate staging texture for C
-        shadowMapArrayC = createShadowMapArray(cascadeCount, shadowMapSize);
+        // Separate staging texture for C (only allocated if leapfrog is active)
+        if (RenderConfig.LEAPFROG_SHADOWS_ENABLED) {
+            shadowMapArrayC = createShadowMapArray(cascadeCount, shadowMapSize);
+        } else {
+            shadowMapArrayC = 0;
+        }
 
-        // Color test array (micro-test A — cascadeCount layers, GL_R32F)
-        colorTestArray = createColorTestArray(cascadeCount, shadowMapSize);
+        // Color test array is an obsolete micro-test texture (saves 48 MiB VRAM)
+        colorTestArray = 0;
 
         glDrawBuffer(GL_NONE);
         glReadBuffer(GL_NONE);
@@ -233,7 +198,9 @@ public class ShadowRenderer implements Renderer {
 
         // Initialize all layers to depth 1.0
         clearShadowMapArrayLayers(shadowAtlas, cascadeCount * 2, shadowMapSize);
-        clearShadowMapArrayLayers(shadowMapArrayC, cascadeCount, shadowMapSize);
+        if (shadowMapArrayC != 0) {
+            clearShadowMapArrayLayers(shadowMapArrayC, cascadeCount, shadowMapSize);
+        }
 
         glBindFramebuffer(GL_FRAMEBUFFER, 0);
         glDrawBuffer(GL_BACK);
@@ -338,6 +305,10 @@ public class ShadowRenderer implements Renderer {
 
     @Override
     public void render(RenderContext context) {
+        validationElapsed += context.getDeltaTime();
+        validateThisFrame = validateCulling && RenderConfig.SHADOW_FRUSTUM_CULLING_ENABLED
+                && validationElapsed >= nextValidation;
+        if (validateThisFrame) nextValidation = validationElapsed + 5.0f;
         // Perf isolation test C1: skip GPU shadow depth pass entirely.
         // Atlas retains stale content (fully-lit result) — acceptable for timing only.
         if (!RenderConfig.SHADOW_DEPTH_PASS_ENABLED) {
@@ -357,7 +328,7 @@ public class ShadowRenderer implements Renderer {
             glDepthMask(true);
             glDepthFunc(GL_LESS);
             glViewport(0, 0, savedViewportWidth, savedViewportHeight);
-            drainGLErrors();
+            checkGLErrors("ShadowRenderer.render() entry point");
         }
     }
 
@@ -393,10 +364,17 @@ public class ShadowRenderer implements Renderer {
         leapState = LeapState.OFF;
         crossfadeProgress = 1.0f;
 
-        csmCalculator.updateLightBasis(sunDir);
-        dataA = csmCalculator.computeCascadeMatrices(camera, camForward, camRight, camUp);
-        // Render A into its atlas slot
-        renderShadowMapIntoAtlas(context, shadowAtlas, atlasOffsetA, dataA);
+        boolean basisUpdated = csmCalculator.updateLightBasis(sunDir, true);
+        CascadeData candA = csmCalculator.computeCascadeMatrices(camera, camForward, camRight, camUp);
+        int ixA = snapIndexX(candA), iyA = snapIndexY(candA);
+
+        if (dataA == null || basisUpdated || ixA != lastSnapIxA || iyA != lastSnapIyA) {
+            dataA = candA;
+            renderShadowMapIntoAtlas(context, shadowAtlas, atlasOffsetA, dataA);
+            renderedAThisFrame = true;
+            lastSnapIxA = ixA;
+            lastSnapIyA = iyA;
+        }
         dataB = dataA;
     }
 
@@ -432,12 +410,14 @@ public class ShadowRenderer implements Renderer {
         lastSnapIyB = snapIndexY(dataB);
 
         // C (staging, separate texture)
-        SunData sunDataC = timeManager.getSunDataAtTimeOfDay(tC);
-        csmCalculator.updateLightBasis(sunDataC.sunDir(), true);
-        dataC = csmCalculator.computeCascadeMatrices(camera, camForward, camRight, camUp);
-        copySplitDistances(dataA, dataC);
-        captureBasis(lightDirC, lightRightC, lightUpC);
-        renderShadowMap(context, shadowMapArrayC, dataC);
+        if (shadowMapArrayC != 0) {
+            SunData sunDataC = timeManager.getSunDataAtTimeOfDay(tC);
+            csmCalculator.updateLightBasis(sunDataC.sunDir(), true);
+            dataC = csmCalculator.computeCascadeMatrices(camera, camForward, camRight, camUp);
+            copySplitDistances(dataA, dataC);
+            captureBasis(lightDirC, lightRightC, lightUpC);
+            renderShadowMap(context, shadowMapArrayC, dataC);
+        }
 
         csmCalculator.updateLightBasis(sunDataA.sunDir(), true);
 
@@ -571,7 +551,7 @@ public class ShadowRenderer implements Renderer {
         }
 
         // Flush C staging progressively: 1 cascade per frame
-        if (cDirty && !renderedCThisFrame && !renderedAThisFrame && !renderedBThisFrame) {
+        if (shadowMapArrayC != 0 && cDirty && !renderedCThisFrame && !renderedAThisFrame && !renderedBThisFrame) {
             int layer = Math.max(0, Math.min(cCascadeCursor, cascadeCountCached - 1));
             renderShadowMapLayer(context, shadowMapArrayC, dataC, layer);
             renderedCThisFrame = true;
@@ -583,13 +563,13 @@ public class ShadowRenderer implements Renderer {
             }
         }
 
-        // Debug logging (once per second)
+        // Debug logging (disabled to avoid terminal spam)
         logAccumulatorSec += deltaTime;
         if (logAccumulatorSec >= LOG_INTERVAL_SEC) {
-            System.out.printf("[LEAPFROG] state=%s cf=%.3f atlas=%d offA=%d offB=%d C=%d baseA=%.4f toD=%.4f cUpdated=%b%n",
-                    leapState, crossfadeProgress,
-                    shadowAtlas, atlasOffsetA, atlasOffsetB, shadowMapArrayC,
-                    baseTimeOfDayA, timeOfDayNow, cUpdatedThisSecond);
+            // System.out.printf("[LEAPFROG] state=%s cf=%.3f atlas=%d offA=%d offB=%d C=%d baseA=%.4f toD=%.4f cUpdated=%b%n",
+            //         leapState, crossfadeProgress,
+            //         shadowAtlas, atlasOffsetA, atlasOffsetB, shadowMapArrayC,
+            //         baseTimeOfDayA, timeOfDayNow, cUpdatedThisSecond);
             logAccumulatorSec = 0.0f;
             cUpdatedThisSecond = false;
         }
@@ -605,7 +585,7 @@ public class ShadowRenderer implements Renderer {
      */
     private void renderShadowMapIntoAtlas(RenderContext context, int targetArray,
                                           int atlasLayerOffset, CascadeData data) {
-        drainGLErrors();
+        checkGLErrors("ShadowRenderer.renderShadowMapIntoAtlas() entry point");
 
         savedViewportWidth = context.getWindowWidth();
         savedViewportHeight = context.getWindowHeight();
@@ -637,7 +617,7 @@ public class ShadowRenderer implements Renderer {
                 glFramebufferTextureLayer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, targetArray, 0, layer);
                 glClear(GL_DEPTH_BUFFER_BIT);
                 depthShader.setMat4("lightSpaceMatrix", data.lightSpaceMatrices()[i]);
-                context.getWorld().renderDepth(depthShader);
+                renderCascadeDepth(context, data, i);
             }
 
             depthShader.unbind();
@@ -649,13 +629,13 @@ public class ShadowRenderer implements Renderer {
             glColorMask(true, true, true, true);
             glDepthMask(true);
             glDepthFunc(GL_LESS);
-            drainGLErrors();
+            checkGLErrors("ShadowRenderer.renderShadowMapIntoAtlas() exit");
         }
     }
 
     /** Render all cascades into a standalone texture (used for C staging). */
     private void renderShadowMap(RenderContext context, int targetArray, CascadeData data) {
-        drainGLErrors();
+        checkGLErrors("ShadowRenderer.renderShadowMap() entry point");
 
         savedViewportWidth = context.getWindowWidth();
         savedViewportHeight = context.getWindowHeight();
@@ -685,7 +665,7 @@ public class ShadowRenderer implements Renderer {
                 glFramebufferTextureLayer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, targetArray, 0, i);
                 glClear(GL_DEPTH_BUFFER_BIT);
                 depthShader.setMat4("lightSpaceMatrix", data.lightSpaceMatrices()[i]);
-                context.getWorld().renderDepth(depthShader);
+                renderCascadeDepth(context, data, i);
             }
 
             depthShader.unbind();
@@ -697,14 +677,14 @@ public class ShadowRenderer implements Renderer {
             glColorMask(true, true, true, true);
             glDepthMask(true);
             glDepthFunc(GL_LESS);
-            drainGLErrors();
+            checkGLErrors("ShadowRenderer.renderShadowMap() exit");
         }
     }
 
     /** Render a single cascade layer into a standalone texture (sliced C updates). */
     private void renderShadowMapLayer(RenderContext context, int targetArray,
                                       CascadeData data, int cascadeLayer) {
-        drainGLErrors();
+        checkGLErrors("ShadowRenderer.renderShadowMapLayer() entry point");
 
         savedViewportWidth = context.getWindowWidth();
         savedViewportHeight = context.getWindowHeight();
@@ -732,7 +712,7 @@ public class ShadowRenderer implements Renderer {
             glFramebufferTextureLayer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, targetArray, 0, cascadeLayer);
             glClear(GL_DEPTH_BUFFER_BIT);
             depthShader.setMat4("lightSpaceMatrix", data.lightSpaceMatrices()[cascadeLayer]);
-            context.getWorld().renderDepth(depthShader);
+            renderCascadeDepth(context, data, cascadeLayer);
 
             depthShader.unbind();
         } finally {
@@ -743,21 +723,62 @@ public class ShadowRenderer implements Renderer {
             glColorMask(true, true, true, true);
             glDepthMask(true);
             glDepthFunc(GL_LESS);
-            drainGLErrors();
+            checkGLErrors("ShadowRenderer.renderShadowMapLayer() exit");
         }
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
-    // CLEANUP
+    // CASCADE CULLING AND OPTIONAL VALIDATION
     // ═══════════════════════════════════════════════════════════════════════════
 
+    private void renderCascadeDepth(RenderContext context, CascadeData data, int cascade) {
+        FrustumIntersection frustum = null;
+        if (RenderConfig.SHADOW_FRUSTUM_CULLING_ENABLED) {
+            // This is the very same OpenGL [-w,+w] clip transform uploaded to the depth shader.
+            lightFrustum.set(data.lightSpaceMatrices()[cascade]);
+            frustum = lightFrustum;
+        }
+        context.getWorld().renderDepth(depthShader, data.sphereCenter(cascade), data.cullRadius(cascade), frustum);
+        if (validateThisFrame) validateCascadeDepth(context, data, cascade);
+    }
+
+    /** Compare the same cascade/pose/sun/meshes; restores reference depth in the bound attachment. */
+    private void validateCascadeDepth(RenderContext context, CascadeData data, int cascade) {
+        int size = RenderConfig.CSM_SHADOW_MAP_SIZE;
+        FloatBuffer culled = MemoryUtil.memAllocFloat(size * size);
+        try {
+            FloatBuffer reference = MemoryUtil.memAllocFloat(size * size);
+            try {
+                glReadPixels(0, 0, size, size, GL_DEPTH_COMPONENT, GL_FLOAT, culled);
+                glClear(GL_DEPTH_BUFFER_BIT);
+                context.getWorld().renderDepth(depthShader, data.sphereCenter(cascade), data.cullRadius(cascade));
+                glReadPixels(0, 0, size, size, GL_DEPTH_COMPONENT, GL_FLOAT, reference);
+                int error = glGetError();
+                if (error != GL_NO_ERROR) throw new IllegalStateException("Shadow validation GL error: " + error);
+                int differences = 0;
+                for (int i = 0; i < culled.capacity(); i++) {
+                    if (Float.floatToIntBits(culled.get(i)) != Float.floatToIntBits(reference.get(i))) differences++;
+                }
+                if (differences != 0) {
+                    throw new IllegalStateException("Shadow culling changed " + differences + " depth texels in cascade " + cascade);
+                }
+                System.out.println("Shadow culling validation PASS: cascade=" + cascade
+                        + "; elapsed=" + validationElapsed + "; compared=" + culled.capacity() + " depth texels");
+            } finally {
+                MemoryUtil.memFree(reference);
+            }
+        } finally {
+            MemoryUtil.memFree(culled);
+        }
+    }
+
+    // GPU resources owned by this renderer; the depth shader remains borrowed.
     @Override
     public void cleanup() {
-        depthShader.cleanup();
-        if (shadowAtlas != 0)      glDeleteTextures(shadowAtlas);
-        if (shadowMapArrayC != 0)  glDeleteTextures(shadowMapArrayC);
-        if (colorTestArray != 0)   glDeleteTextures(colorTestArray);
-        if (fbo != 0)              glDeleteFramebuffers(fbo);
+        if (shadowAtlas != 0)      { glDeleteTextures(shadowAtlas); shadowAtlas = 0; }
+        if (shadowMapArrayC != 0)  { glDeleteTextures(shadowMapArrayC); shadowMapArrayC = 0; }
+        if (colorTestArray != 0)   { glDeleteTextures(colorTestArray); colorTestArray = 0; }
+        if (fbo != 0)              { glDeleteFramebuffers(fbo); fbo = 0; }
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
@@ -834,17 +855,13 @@ public class ShadowRenderer implements Renderer {
     }
 
     private int snapIndexX(CascadeData d) {
-        if (d == null) return 0;
-        float snappedX = -d.lightSpaceMatrices()[0].m30();
-        float texel = d.texelSizes()[0];
-        return Math.round(snappedX / texel);
+        if (d == null || d.snapIndicesX() == null || d.snapIndicesX().length == 0) return 0;
+        return d.snapIndicesX()[0];
     }
 
     private int snapIndexY(CascadeData d) {
-        if (d == null) return 0;
-        float snappedY = -d.lightSpaceMatrices()[0].m31();
-        float texel = d.texelSizes()[0];
-        return Math.round(snappedY / texel);
+        if (d == null || d.snapIndicesY() == null || d.snapIndicesY().length == 0) return 0;
+        return d.snapIndicesY()[0];
     }
 
     private void computeCameraBasisFromViewMatrix(Matrix4f view) {
@@ -855,9 +872,26 @@ public class ShadowRenderer implements Renderer {
         camRight.cross(camForward, camUp).normalize();
     }
 
-    private void drainGLErrors() {
-        while (glGetError() != GL_NO_ERROR) { }
+    public static void checkGLErrors(String location) {
+        checkGLError(location);
     }
+
+    public static void checkGLError(String location) {
+    int error;
+    while ((error = glGetError()) != GL_NO_ERROR) {
+        String errorName = switch (error) {
+            case GL_INVALID_ENUM -> "GL_INVALID_ENUM";
+            case GL_INVALID_VALUE -> "GL_INVALID_VALUE";
+            case GL_INVALID_OPERATION -> "GL_INVALID_OPERATION";
+            case GL_STACK_OVERFLOW -> "GL_STACK_OVERFLOW";
+            case GL_STACK_UNDERFLOW -> "GL_STACK_UNDERFLOW";
+            case GL_OUT_OF_MEMORY -> "GL_OUT_OF_MEMORY";
+            case GL_INVALID_FRAMEBUFFER_OPERATION -> "GL_INVALID_FRAMEBUFFER_OPERATION";
+            default -> "0x" + Integer.toHexString(error);
+        };
+        System.err.println("[GL ERROR] " + errorName + " at: " + location);
+    }
+}
 
     // ═══════════════════════════════════════════════════════════════════════════
     // CSM DIAGNOSTIC CONTROLS

@@ -309,15 +309,19 @@ public class CSMCalculator {
         }
 
         Matrix4f[] matrices = new Matrix4f[cascadeCount];
+        int[] snapIndicesX = new int[cascadeCount];
+        int[] snapIndicesY = new int[cascadeCount];
+        Vector3f[] sphereCenters = new Vector3f[cascadeCount];
         float fovRad = (float) Math.toRadians(cachedFov);
         float tanHalfFov = (float) Math.tan(fovRad / 2.0f);
 
         for (int i = 0; i < cascadeCount; i++) {
+            sphereCenters[i] = new Vector3f(camForward).mul(sphereCenterDistances[i]).add(camPos);
             matrices[i] = computeCascadeMatrixWithBasis(i, camPos, camForward, camRight, camUp,
-                tanHalfFov, cachedAspect, extLightDir, extLightRight, extLightUp);
+                tanHalfFov, cachedAspect, extLightDir, extLightRight, extLightUp, snapIndicesX, snapIndicesY);
         }
 
-        return new CascadeData(matrices, splitDistances.clone(), sphereRadii.clone(), texelSizes.clone());
+        return new CascadeData(matrices, splitDistances.clone(), sphereRadii.clone(), texelSizes.clone(), snapIndicesX, snapIndicesY, sphereCenters);
     }
 
     public CascadeData computeCascadeMatrices(Camera camera, Vector3f camForward, Vector3f camRight, Vector3f camUp) {
@@ -328,14 +332,18 @@ public class CSMCalculator {
         }
 
         Matrix4f[] matrices = new Matrix4f[cascadeCount];
+        int[] snapIndicesX = new int[cascadeCount];
+        int[] snapIndicesY = new int[cascadeCount];
+        Vector3f[] sphereCenters = new Vector3f[cascadeCount];
         float fovRad = (float) Math.toRadians(cachedFov);
         float tanHalfFov = (float) Math.tan(fovRad / 2.0f);
 
         for (int i = 0; i < cascadeCount; i++) {
-            matrices[i] = computeCascadeMatrix(i, camPos, camForward, camRight, camUp, tanHalfFov, cachedAspect);
+            sphereCenters[i] = new Vector3f(camForward).mul(sphereCenterDistances[i]).add(camPos);
+            matrices[i] = computeCascadeMatrix(i, camPos, camForward, camRight, camUp, tanHalfFov, cachedAspect, snapIndicesX, snapIndicesY);
         }
 
-        return new CascadeData(matrices, splitDistances.clone(), sphereRadii.clone(), texelSizes.clone());
+        return new CascadeData(matrices, splitDistances.clone(), sphereRadii.clone(), texelSizes.clone(), snapIndicesX, snapIndicesY, sphereCenters);
     }
 
     private Matrix4f computeCascadeMatrix(
@@ -345,7 +353,9 @@ public class CSMCalculator {
             Vector3f camRight,
             Vector3f camUp,
             float tanHalfFov,
-            float aspect
+            float aspect,
+            int[] outSnapX,
+            int[] outSnapY
     ) {
         float zNear = splitDistances[cascadeIndex];
         float zFar = splitDistances[cascadeIndex + 1];
@@ -386,8 +396,10 @@ public class CSMCalculator {
         float centerLS_Y = sphereCenterWS.dot(lightUp);
 
         // Snap to texel grid
-        float snappedX = Math.round(centerLS_X / texelSize) * texelSize;
-        float snappedY = Math.round(centerLS_Y / texelSize) * texelSize;
+        int snapCellX = Math.round(centerLS_X / texelSize);
+        int snapCellY = Math.round(centerLS_Y / texelSize);
+        float snappedX = snapCellX * texelSize;
+        float snappedY = snapCellY * texelSize;
 
         // Handle frozen snapped XY
         if (freezeSnappedXY) {
@@ -400,8 +412,13 @@ public class CSMCalculator {
             } else {
                 snappedX = frozenSnappedX[cascadeIndex];
                 snappedY = frozenSnappedY[cascadeIndex];
+                snapCellX = Math.round(snappedX / texelSize);
+                snapCellY = Math.round(snappedY / texelSize);
             }
         }
+
+        if (outSnapX != null) outSnapX[cascadeIndex] = snapCellX;
+        if (outSnapY != null) outSnapY[cascadeIndex] = snapCellY;
 
         // Compute Z range
         float sphereCenterZ = sphereCenterWS.dot(lightDir);
@@ -478,7 +495,9 @@ public class CSMCalculator {
             float aspect,
             Vector3f extLightDir,
             Vector3f extLightRight,
-            Vector3f extLightUp
+            Vector3f extLightUp,
+            int[] outSnapX,
+            int[] outSnapY
     ) {
         float zNear = splitDistances[cascadeIndex];
         float zFar = splitDistances[cascadeIndex + 1];
@@ -513,8 +532,13 @@ public class CSMCalculator {
         float centerLS_Y = sphereCenterWS.dot(extLightUp);
 
         // Snap to texel grid
-        float snappedX = Math.round(centerLS_X / texelSize) * texelSize;
-        float snappedY = Math.round(centerLS_Y / texelSize) * texelSize;
+        int snapCellX = Math.round(centerLS_X / texelSize);
+        int snapCellY = Math.round(centerLS_Y / texelSize);
+        float snappedX = snapCellX * texelSize;
+        float snappedY = snapCellY * texelSize;
+
+        if (outSnapX != null) outSnapX[cascadeIndex] = snapCellX;
+        if (outSnapY != null) outSnapY[cascadeIndex] = snapCellY;
 
         // Compute Z range using EXTERNAL light basis
         float sphereCenterZ = sphereCenterWS.dot(extLightDir);

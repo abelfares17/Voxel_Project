@@ -40,3 +40,8 @@ test/
 saves/
 captures/
 logs/
+
+# Runtime harness sources are required by PlayingState, not disposable test output.
+!src/main/java/engine/test/
+!src/main/java/engine/test/TestHarness.java
+!src/main/java/engine/test/PerfLogger.java

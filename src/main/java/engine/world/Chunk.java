@@ -130,9 +130,16 @@ public class Chunk {
      * Stocke le VAO, le VBO et le nombre de vertices après appel à MeshBuilder.buildChunkMesh(...)
      * Set meshDirty à false pour indiquer que le mesh est à jour.
      */
-    public void setMesh(int vao, int vbo, int vertexCount) {
-        this.vao = vao;
-        this.vbo = vbo;
+    public void setMesh(int newVao, int newVbo, int vertexCount) {
+        //Libérez les buffers avant de les écraser
+        if (this.vao != 0 && this.vao != newVao) {
+            org.lwjgl.opengl.GL30.glDeleteVertexArrays(this.vao);
+        }
+        if (this.vbo != 0 && this.vbo != newVbo) {
+            org.lwjgl.opengl.GL15.glDeleteBuffers(this.vbo);
+        }
+        this.vao = newVao;
+        this.vbo = newVbo;
         this.vertexCount = vertexCount;
         this.meshDirty = false;
         //System.out.println("setMesh: vao=" + vao + " vbo=" + vbo + " count=" + vertexCount);

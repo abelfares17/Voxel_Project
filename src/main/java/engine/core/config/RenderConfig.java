@@ -110,13 +110,24 @@ public class RenderConfig {
      */
     public static boolean SHADOW_DEPTH_PASS_ENABLED = true;
 
+    /** Reject chunk bounds entirely outside the actual light clip volume; false is the A/B reference. */
+    public static final boolean SHADOW_FRUSTUM_CULLING_ENABLED =
+            Boolean.parseBoolean(System.getProperty("voxel.shadowFrustumCulling", "true"));
+
+    /**
+     * Activer le système Leapfrog (double tampon temporel A/B).
+     * false = Mode CSM direct (recommandé : évolution continue et fluide du soleil, pas de diaporama/slideshow).
+     * true  = Mode Leapfrog (double tampon prévisionnel).
+     */
+    public static boolean LEAPFROG_SHADOWS_ENABLED = false;
+
     /**
      * Shadow atlas min/mag filter mode.
      * 0 = GL_LINEAR (default — current production setting)
      * 1 = GL_NEAREST
      * Change requires restart (texture is created once at init).
      */
-    public static int SHADOW_MAP_FILTER = 0;
+    public static int SHADOW_MAP_FILTER = 1;
 
     /**
      * Shadow atlas internal depth format.
@@ -140,14 +151,14 @@ public class RenderConfig {
     /** Shadow map resolution per cascade (square) */
     public static final int CSM_SHADOW_MAP_SIZE = 2048;
 
-    /** Practical split lambda: 0 = linear, 1 = logarithmic, 0.75 = practical blend favoring near */
-    public static final float CSM_SPLIT_LAMBDA = 0.55f;
+    /** Practical split lambda: 0 = linear, 1 = logarithmic, 0.62 = practical blend extending near field */
+    public static final float CSM_SPLIT_LAMBDA = 0.62f;
 
     /** Depth margin ratio for shadow casters behind the view frustum (0.5 = 50% extension) */
     public static final float CSM_DEPTH_MARGIN_RATIO = 0.5f;
 
-    /** Shadow far plane for CSM (shorter than camera far for better quality) */
-    public static final float CSM_SHADOW_FAR = 400.0f;
+    /** Shadow far plane for CSM (matches loaded chunk visibility before fog) */
+    public static final float CSM_SHADOW_FAR = 200.0f;
 
     /** Light basis transition start (alignment with world up) */
     public static final float CSM_LIGHT_BASIS_TRANSITION_START = 0.9f;

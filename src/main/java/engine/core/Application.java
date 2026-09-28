@@ -3,6 +3,9 @@ package engine.core;
 import java.nio.IntBuffer;
 
 import org.lwjgl.BufferUtils;
+import org.lwjgl.system.Configuration;
+
+import static org.lwjgl.glfw.GLFW.GLFW_COCOA_RETINA_FRAMEBUFFER;
 import static org.lwjgl.glfw.GLFW.GLFW_CONTEXT_VERSION_MAJOR;
 import static org.lwjgl.glfw.GLFW.GLFW_CONTEXT_VERSION_MINOR;
 import static org.lwjgl.glfw.GLFW.GLFW_CURSOR;
@@ -26,6 +29,7 @@ import static org.lwjgl.glfw.GLFW.glfwSetFramebufferSizeCallback;
 import static org.lwjgl.glfw.GLFW.glfwSetInputMode;
 import static org.lwjgl.glfw.GLFW.glfwSetKeyCallback;
 import static org.lwjgl.glfw.GLFW.glfwSetWindowPos;
+import static org.lwjgl.glfw.GLFW.glfwSetWindowSize;
 import static org.lwjgl.glfw.GLFW.glfwSetWindowShouldClose;
 import static org.lwjgl.glfw.GLFW.glfwShowWindow;
 import static org.lwjgl.glfw.GLFW.glfwSwapBuffers;
@@ -33,16 +37,12 @@ import static org.lwjgl.glfw.GLFW.glfwSwapInterval;
 import static org.lwjgl.glfw.GLFW.glfwTerminate;
 import static org.lwjgl.glfw.GLFW.glfwWindowHint;
 import static org.lwjgl.glfw.GLFW.glfwWindowShouldClose;
+import static org.lwjgl.glfw.Callbacks.glfwFreeCallbacks;
 import org.lwjgl.glfw.GLFWErrorCallback;
 import org.lwjgl.opengl.GL;
-import static org.lwjgl.opengl.GL11.GL_DEPTH_TEST;
-import static org.lwjgl.opengl.GL11.GL_FILL;
-import static org.lwjgl.opengl.GL11.GL_FRONT_AND_BACK;
-import static org.lwjgl.opengl.GL11.glEnable;
-import static org.lwjgl.opengl.GL11.glFinish;
-import static org.lwjgl.opengl.GL11.glPolygonMode;
-import static org.lwjgl.opengl.GL11.glViewport;
-import static org.lwjgl.opengl.GL30.GL_FRAMEBUFFER_SRGB;
+import static org.lwjgl.opengl.GL11.*;
+import static org.lwjgl.opengl.GL20.*;
+import static org.lwjgl.opengl.GL30.*;
 
 import engine.core.config.GameConfig;
 import engine.core.states.LoadingState;
@@ -63,6 +63,7 @@ public class Application {
     private Input input;
     private RenderContext renderContext;
     private UIScreenScaler scaler;
+    private GLFWErrorCallback errorCallback;
 
     private long lastFrameTime;
     private int windowWidth;
@@ -76,6 +77,13 @@ public class Application {
      * Run the application (init -> loop -> cleanup).
      */
     public void run() {
+        if (GameConfig.DEBUG_MEMORY_ALLOCATOR) {
+            // Active le traqueur d'allocations mémoire natives LWJGL
+            Configuration.DEBUG.set(true);
+            Configuration.DEBUG_MEMORY_ALLOCATOR.set(true);
+            Configuration.DEBUG_STACK.set(true);
+        }
+
         init();
         loop();
         cleanup();
@@ -86,7 +94,7 @@ public class Application {
      */
     private void init() {
         // GLFW error callback
-        GLFWErrorCallback.createPrint(System.err).set();
+        errorCallback = GLFWErrorCallback.createPrint(System.err).set();
 
         if (!glfwInit()) {
             throw new IllegalStateException("Unable to initialize GLFW");
@@ -109,7 +117,11 @@ public class Application {
 
         windowWidth = vidMode.width();
         windowHeight = vidMode.height() - GameConfig.WINDOW_HEIGHT_REDUCTION;
-        //glfwWindowHint(GLFW_COCOA_RETINA_FRAMEBUFFER, GLFW_FALSE);
+        System.out.println("Initial logical window scale: " + GameConfig.WINDOW_SCALE
+                + "; Retina: " + GameConfig.RETINA_FRAMEBUFFER_ENABLED);
+        if (!GameConfig.RETINA_FRAMEBUFFER_ENABLED) {
+            glfwWindowHint(GLFW_COCOA_RETINA_FRAMEBUFFER, GLFW_FALSE);
+        }
         window = glfwCreateWindow(windowWidth, windowHeight, GameConfig.WINDOW_TITLE, 0, 0);
 
         if (window == 0) {
@@ -124,6 +136,18 @@ public class Application {
         glfwSwapInterval(GameConfig.VSYNC_ENABLED);
         glfwShowWindow(window);
 
+        // Let Cocoa apply desktop/title-bar constraints before scaling the actual content area.
+        // Scaling the requested monitor size instead changes aspect when only the full window is clamped.
+        glfwPollEvents();
+        int[] logicalWidth = new int[1], logicalHeight = new int[1];
+        glfwGetWindowSize(window, logicalWidth, logicalHeight);
+        if (GameConfig.WINDOW_SCALE != 1.0f) {
+            glfwSetWindowSize(window,
+                    Math.max(1, Math.round(logicalWidth[0] * GameConfig.WINDOW_SCALE)),
+                    Math.max(1, Math.round(logicalHeight[0] * GameConfig.WINDOW_SCALE)));
+            glfwPollEvents();
+        }
+
         // Input setup
         scaler = new UIScreenScaler(window);
         input = new Input(window, scaler);
@@ -136,6 +160,19 @@ public class Application {
 
         // Create OpenGL capabilities
         GL.createCapabilities();
+
+        //Log GL Starting State
+        System.out.println("=== OPENGL RUNTIME IDENTITY ===");
+        System.out.println("GL_VENDOR:   " + glGetString(GL_VENDOR));
+        System.out.println("GL_RENDERER: " + glGetString(GL_RENDERER));
+        System.out.println("GL_VERSION:  " + glGetString(GL_VERSION));
+        System.out.println("GLSL:        " + glGetString(GL_SHADING_LANGUAGE_VERSION));
+        System.out.println("Max Texture Units:   " + glGetInteger(GL_MAX_TEXTURE_IMAGE_UNITS));
+        System.out.println("Max 2D Array Layers: " + glGetInteger(GL_MAX_ARRAY_TEXTURE_LAYERS));
+        if (GameConfig.DEBUG_MEMORY_ALLOCATOR) {
+            System.out.println("LWJGL Debug Allocator: " + Configuration.DEBUG_MEMORY_ALLOCATOR.get());
+        }
+        System.out.println("===============================");
 
         // Get framebuffer size
         IntBuffer fbW = BufferUtils.createIntBuffer(1);
@@ -169,7 +206,7 @@ public class Application {
 
         // Framebuffer resize callback
         glfwSetFramebufferSizeCallback(window, (win, width, height) -> {
-            if (height == 0) return;
+            if (width == 0 || height == 0) return;
             windowWidth = width;
             windowHeight = height;
             renderContext.setWindowSize(width, height);
@@ -244,9 +281,11 @@ public class Application {
                 long tRender1 = System.nanoTime();
 
                 // Synchronize GPU and CPU to get accurate timing for swap buffers
-                long tF0 = System.nanoTime();
-                glFinish();
-                long tF1 = System.nanoTime();
+                // DISABLED: glFinish() forces CPU to stall until GPU is completely idle, destroying pipelining.
+                // long tF0 = System.nanoTime();
+                // glFinish();
+                // long tF1 = System.nanoTime();
+                long tF0 = 0, tF1 = 0;
 
                 // Swap buffers and time it
                 long tSwap0 = System.nanoTime();
@@ -268,11 +307,11 @@ public class Application {
                 renderContext.setSwapMs(msSwap);
                 renderContext.setGlFinishMs(msFinish);
 
-                // Console logging (only in PlayingState, not in test mode)
-                if (!GameConfig.TEST_HARNESS_ENABLED && stateManager.getCurrentState() instanceof PlayingState) {
-                    System.out.printf("Frame time: %.2f ms (update=%.2f ms, render=%.2f ms, glfinish=%.2fms, swap=%.2f ms)%n",
-                        msFrame, msUpdate, msRender, msFinish, msSwap);
-                }
+                // Console logging disabled to avoid terminal spam
+                // if (!GameConfig.TEST_HARNESS_ENABLED && stateManager.getCurrentState() instanceof PlayingState) {
+                //     System.out.printf("Frame time: %.2f ms (update=%.2f ms, render=%.2f ms, glfinish=%.2fms, swap=%.2f ms)%n",
+                //         msFrame, msUpdate, msRender, msFinish, msSwap);
+                // }
 
                 fpsFrames++;
                 double t = org.lwjgl.glfw.GLFW.glfwGetTime();
@@ -298,8 +337,18 @@ public class Application {
         System.out.println("Cleaning up application...");
         stateManager.cleanup();
         renderContext.cleanup();
+        glfwFreeCallbacks(window);
         glfwDestroyWindow(window);
+        if (errorCallback != null) {
+            errorCallback.free();
+            errorCallback = null;
+        }
         glfwTerminate();
+        if (GameConfig.DEBUG_MEMORY_ALLOCATOR) {
+            System.out.println("Application cleanup complete. Monitoring native memory via LWJGL DebugAllocator on shutdown...");
+        } else {
+            System.out.println("Application cleanup complete.");
+        }
     }
 
     /**

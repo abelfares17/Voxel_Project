@@ -30,6 +30,7 @@ import engine.entity.Player;
 import engine.input.Input;
 import engine.physics.PhysicsEngine;
 import engine.render.TextRenderer;
+import engine.render.GpuPassTimer;
 import engine.render.camera.PerspectiveCamera;
 import engine.render.core.RenderContext;
 import engine.render.renderer.ShadowRenderer;
@@ -135,11 +136,14 @@ public class Game {
         int playerChunkZ = chunkCoords[1];
 
         Chunk currentChunk = world.getChunk(playerChunkX, playerChunkZ);
-        if (currentChunk != null) {
+        if (currentChunk != null && !GameConfig.TEST_HARNESS_ENABLED) {
             player.update(currentChunk, input);
         }
 
         world.update(playerChunkX, playerChunkZ);
+
+        // The harness owns the pose and controls; real mouse/key input must not alter a run.
+        if (GameConfig.TEST_HARNESS_ENABLED) return;
 
         // Toggle spectator mode
         if (input.isKeyPressed(GLFW_KEY_P)) {
@@ -246,7 +250,7 @@ public class Game {
         }
     }
 
-    public void render(RenderContext context) {
+    public void render(RenderContext context, GpuPassTimer gpuTimer) {
         //world.getMeshManager().uploadMeshesIfAny();
 
         context.setCamera(camera);
@@ -261,8 +265,13 @@ public class Game {
         context.setSunDirShadows(world.getTimeManager().getSunData().sunDir());
         context.setDayNightPeriodSec(world.getTimeManager().getDayNightPeriodSec());
 
-        // Render pipeline
+        if (gpuTimer != null) gpuTimer.beginFrame(context);
+        world.resetDepthStats();
+
+        // Render pipeline; non-overlapping queries, no synchronous result readback.
+        if (gpuTimer != null) gpuTimer.beginPass(GpuPassTimer.Pass.SHADOW);
         shadowRenderer.render(context);
+        if (gpuTimer != null) gpuTimer.endPass();
 
         // Per-pass timing: glFinish after shadow pass to isolate shadow GPU cost.
         // WARNING: breaks GPU pipelining → artificially inflates total frame time.
@@ -274,11 +283,21 @@ public class Game {
             context.setShadowFinishMs((tShadow1 - tShadow0) / 1e6);
         }
 
+        if (gpuTimer != null) gpuTimer.beginPass(GpuPassTimer.Pass.SKY_SUN);
         skyRenderer.render(context);
         sunRenderer.render(context);
+        if (gpuTimer != null) gpuTimer.endPass();
+        if (gpuTimer != null) gpuTimer.beginPass(GpuPassTimer.Pass.VOXEL);
         voxelRenderer.render(context);
+        if (gpuTimer != null) gpuTimer.endPass();
 
+        if (gpuTimer != null) gpuTimer.beginPass(GpuPassTimer.Pass.UI);
         renderUI(context);
+        if (gpuTimer != null) {
+            gpuTimer.endPass();
+            gpuTimer.endFrame(world.getDepthDrawCalls(), world.getDepthVertices(),
+                    voxelRenderer.getDrawCalls(), voxelRenderer.getDrawnVertices());
+        }
     }
 
     private void showDebugNotification(String message) {

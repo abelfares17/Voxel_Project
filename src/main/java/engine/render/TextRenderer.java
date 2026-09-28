@@ -8,41 +8,11 @@ import java.nio.FloatBuffer;
 import org.joml.Matrix4f;
 import org.joml.Vector3f;
 import org.lwjgl.BufferUtils;
-import static org.lwjgl.opengl.GL11.GL_BLEND;
-import static org.lwjgl.opengl.GL11.GL_CULL_FACE;
-import static org.lwjgl.opengl.GL11.GL_DEPTH_TEST;
-import static org.lwjgl.opengl.GL11.GL_FLOAT;
-import static org.lwjgl.opengl.GL11.GL_LINEAR;
-import static org.lwjgl.opengl.GL11.GL_ONE_MINUS_SRC_ALPHA;
-import static org.lwjgl.opengl.GL11.GL_RED;
-import static org.lwjgl.opengl.GL11.GL_SRC_ALPHA;
-import static org.lwjgl.opengl.GL11.GL_TEXTURE_2D;
-import static org.lwjgl.opengl.GL11.GL_TEXTURE_MAG_FILTER;
-import static org.lwjgl.opengl.GL11.GL_TEXTURE_MIN_FILTER;
-import static org.lwjgl.opengl.GL11.GL_TRIANGLES;
-import static org.lwjgl.opengl.GL11.GL_UNSIGNED_BYTE;
-import static org.lwjgl.opengl.GL11.glBindTexture;
-import static org.lwjgl.opengl.GL11.glBlendFunc;
-import static org.lwjgl.opengl.GL11.glDeleteTextures;
-import static org.lwjgl.opengl.GL11.glDisable;
-import static org.lwjgl.opengl.GL11.glDrawArrays;
-import static org.lwjgl.opengl.GL11.glEnable;
-import static org.lwjgl.opengl.GL11.glGenTextures;
-import static org.lwjgl.opengl.GL11.glTexImage2D;
-import static org.lwjgl.opengl.GL11.glTexParameteri;
-import static org.lwjgl.opengl.GL13.GL_TEXTURE0;
-import static org.lwjgl.opengl.GL13.glActiveTexture;
-import static org.lwjgl.opengl.GL15.GL_ARRAY_BUFFER;
-import static org.lwjgl.opengl.GL15.GL_DYNAMIC_DRAW;
-import static org.lwjgl.opengl.GL15.glBindBuffer;
-import static org.lwjgl.opengl.GL15.glBufferData;
-import static org.lwjgl.opengl.GL15.glDeleteBuffers;
-import static org.lwjgl.opengl.GL15.glGenBuffers;
-import static org.lwjgl.opengl.GL20.glEnableVertexAttribArray;
-import static org.lwjgl.opengl.GL20.glVertexAttribPointer;
-import static org.lwjgl.opengl.GL30.glBindVertexArray;
-import static org.lwjgl.opengl.GL30.glDeleteVertexArrays;
-import static org.lwjgl.opengl.GL30.glGenVertexArrays;
+import static org.lwjgl.opengl.GL11.*;
+import static org.lwjgl.opengl.GL13.*;
+import static org.lwjgl.opengl.GL15.*;
+import static org.lwjgl.opengl.GL20.*;
+import static org.lwjgl.opengl.GL30.*;
 import org.lwjgl.stb.STBTTAlignedQuad;
 import org.lwjgl.stb.STBTTBakedChar;
 import static org.lwjgl.stb.STBTruetype.stbtt_BakeFontBitmap;
@@ -112,6 +82,7 @@ public class TextRenderer {
         // Use Y coordinate directly - ortho projection already handles top-origin coordinates
         // Start cursor at (0, 0) to get relative positions, then add base position after scaling
         float cursorX = 0, cursorY = 0;
+        int validQuads = 0;
         try (MemoryStack stack = MemoryStack.stackPush()) {
             FloatBuffer px = stack.floats(cursorX), py = stack.floats(cursorY);
             STBTTAlignedQuad quad = STBTTAlignedQuad.mallocStack(stack);
@@ -131,6 +102,7 @@ public class TextRenderer {
                 verts.put(x0).put(y0).put(u0).put(v0);
                 verts.put(x1).put(y1).put(u1).put(v1);
                 verts.put(x0).put(y1).put(u0).put(v1);
+                validQuads++;
             }
             verts.flip();
         }
@@ -152,12 +124,14 @@ public class TextRenderer {
         glEnable(GL_BLEND);
         glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 
-        glDrawArrays(GL_TRIANGLES, 0, 6 * text.length());
+        if (validQuads > 0) {
+            glDrawArrays(GL_TRIANGLES, 0, 6 * validQuads);
+        }
 
         glBindVertexArray(0);
         shader.unbind();
 
-        glEnable(GL_DEPTH_TEST);
+        // Ne pas réactiver GL_DEPTH_TEST ici (TextRenderer est un renderer 2D UI)
         glDisable(GL_BLEND);
         // Don't re-enable culling - let next render pass manage its own state
     }

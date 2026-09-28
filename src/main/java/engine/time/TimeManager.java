@@ -1,5 +1,6 @@
 package engine.time;
 
+import engine.core.config.GameConfig;
 import org.joml.Vector3f;
 
 /**
@@ -12,8 +13,8 @@ public class TimeManager {
     // Day/night cycle period in seconds (derived from BASE_SPEED: 1/600000 per ms = 600s per cycle)
     private static final float DAY_NIGHT_PERIOD_SEC = 600.0f;
 
-    // Debug: time speed multiplier (1.0 = normal, 0.1 = 10x slower, 10.0 = 10x faster)
-    private float debugSpeedMultiplier = 1.0f;  // Default: normal speed
+    // Debug: time speed multiplier (1.0 = 10x test speed, 0.1 = normal 1x game speed)
+    private float debugSpeedMultiplier = GameConfig.SUN_SPEED_MULTIPLIER;
 
     // Ajout pour FPS
     private int frames = 0;
@@ -110,7 +111,7 @@ public class TimeManager {
      * @return Period in seconds for one complete day/night cycle (600s = 10 minutes)
      */
     public float getDayNightPeriodSec() {
-        return DAY_NIGHT_PERIOD_SEC;
+        return DAY_NIGHT_PERIOD_SEC / Math.max(0.0001f, debugSpeedMultiplier);
     }
 
     /**

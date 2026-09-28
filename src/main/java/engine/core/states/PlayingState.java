@@ -1,17 +1,19 @@
 package engine.core.states;
-
-import static org.lwjgl.glfw.GLFW.GLFW_CURSOR;
-import static org.lwjgl.glfw.GLFW.GLFW_CURSOR_DISABLED;
-import static org.lwjgl.glfw.GLFW.GLFW_CURSOR_NORMAL;
-import static org.lwjgl.glfw.GLFW.glfwSetInputMode;
-import static org.lwjgl.glfw.GLFW.glfwSetWindowShouldClose;
+import static org.lwjgl.glfw.GLFW.*;
+import static org.lwjgl.opengl.GL11.*;
+import static org.lwjgl.opengl.GL13.*;
+import static org.lwjgl.opengl.GL15.*;
+import static org.lwjgl.opengl.GL20.*;
+import static org.lwjgl.opengl.GL30.*;
 
 import engine.Game;
 import engine.core.Application;
 import engine.core.GameState;
 import engine.core.config.GameConfig;
+import engine.core.config.RenderConfig;
 import engine.input.Input;
 import engine.render.Shader;
+import engine.render.GpuPassTimer;
 import engine.render.TextRenderer;
 import engine.render.TextureLoader;
 import engine.render.core.RenderContext;
@@ -47,6 +49,8 @@ public class PlayingState implements GameState {
     private VoxelRenderer voxelRenderer;
     private Shader voxelShader;
     private Shader depthShader;
+    private int atlasTextureId = 0;
+    private GpuPassTimer gpuTimer;
 
     // Test harness (only active if GameConfig.TEST_HARNESS_ENABLED)
     private TestHarness testHarness;
@@ -112,7 +116,7 @@ public class PlayingState implements GameState {
         );
 
         // Load texture atlas
-        int atlasTextureId = TextureLoader.loadTextureFromClasspath(GameConfig.ATLAS_TEXTURE_PATH);
+        this.atlasTextureId = TextureLoader.loadTextureFromClasspath(GameConfig.ATLAS_TEXTURE_PATH);
         System.out.println("Atlas texture ID: " + atlasTextureId);
 
         // Create renderers
@@ -135,17 +139,23 @@ public class PlayingState implements GameState {
 
         game.setWinDim(app.getWindowWidth(), app.getWindowHeight());
         game.setAspect((float) app.getWindowWidth() / app.getWindowHeight());
+        gpuTimer = GpuPassTimer.createIfEnabled();
+        System.out.println("Shadow light-frustum culling: " + RenderConfig.SHADOW_FRUSTUM_CULLING_ENABLED);
 
         // Initialize test harness (if enabled)
         if (GameConfig.TEST_HARNESS_ENABLED) {
             testHarness = new TestHarness();
             testHarness.beginRun(game, world, game.getPlayer(), (engine.render.camera.PerspectiveCamera) renderContext.getCamera());
+        }
 
+        // Initialize performance logger (if enabled by config or test harness)
+        if (GameConfig.PERF_LOG_ENABLED || GameConfig.TEST_HARNESS_ENABLED) {
             // Extract PERF_BISECT_STAGE from shader source for CSV labeling
             cachedPerfBisectStage = extractPerfBisectStage();
 
             try {
-                perfLogger = new PerfLogger(world.getWorldName(), GameConfig.TEST_LOG_FREQUENCY);
+                int freq = GameConfig.TEST_HARNESS_ENABLED ? GameConfig.TEST_LOG_FREQUENCY : GameConfig.PERF_LOG_FREQUENCY;
+                perfLogger = new PerfLogger(world.getWorldName(), freq);
             } catch (java.io.IOException e) {
                 System.err.println("Failed to create PerfLogger: " + e.getMessage());
                 e.printStackTrace();
@@ -170,7 +180,7 @@ public class PlayingState implements GameState {
         game.update(deltaTime);
 
         // Log performance metrics (if enabled)
-        if (GameConfig.TEST_HARNESS_ENABLED && perfLogger != null) {
+        if (perfLogger != null) {
             frameIndex++;
 
             // Get player position and camera orientation
@@ -182,7 +192,7 @@ public class PlayingState implements GameState {
             float fpsInstant = deltaTime > 0 ? (1.0f / deltaTime) : 0f;
 
             // Get renderer state (for diagnostic columns)
-            boolean shadowPassEnabled = true; // Shadow renderer always runs
+            boolean shadowPassEnabled = RenderConfig.SHADOW_DEPTH_PASS_ENABLED;
             boolean leapfrogEnabled = shadowRenderer != null && shadowRenderer.isLeapfrogEnabled();
             int debugShadowMode = voxelRenderer != null ? voxelRenderer.getDebugShadow() : 0;
 
@@ -200,30 +210,37 @@ public class PlayingState implements GameState {
                 playerPos,
                 yaw,
                 pitch,
-                0, // visibleChunks (TODO: add if available)
-                0, // renderedVertices (TODO: add if available)
+                voxelRenderer.getDrawCalls(), // Previous rendered frame, like CPU timing fields
+                voxelRenderer.getDrawnVertices(),
                 shadowPassEnabled,
                 leapfrogEnabled,
                 debugShadowMode,
-                cachedPerfBisectStage
+                cachedPerfBisectStage,
+                RenderConfig.SHADOW_FRUSTUM_CULLING_ENABLED,
+                renderContext.getWindowWidth(), renderContext.getWindowHeight(),
+                world.getTimeManager().getTimeOfDay()
             );
         }
     }
 
     @Override
     public void render(RenderContext context) {
-        game.render(context);
+        game.render(context, gpuTimer);
     }
 
     @Override
     public void exit() {
         System.out.println("Exiting Playing state...");
+        if (gpuTimer != null) {
+            gpuTimer.close();
+            gpuTimer = null;
+        }
 
         // Release cursor
         glfwSetInputMode(app.getWindow(), GLFW_CURSOR, GLFW_CURSOR_NORMAL);
 
-        // Close performance logger (if test harness is enabled)
-        if (GameConfig.TEST_HARNESS_ENABLED && perfLogger != null) {
+        // Close performance logger (if active)
+        if (perfLogger != null) {
             perfLogger.close();
             perfLogger = null;
         }
@@ -266,6 +283,12 @@ public class PlayingState implements GameState {
             depthShader = null;
         }
 
+        // 3. Cleanup voxel atlas
+        if (atlasTextureId != 0) {
+            glDeleteTextures(atlasTextureId);
+            atlasTextureId = 0;
+        }
+
         // Cleanup text renderer
         if (textRenderer != null) {
             textRenderer.cleanup();
@@ -284,6 +307,14 @@ public class PlayingState implements GameState {
     @Override
     public boolean blocksGameUpdates() {
         return false; // Game world DOES update in Playing state
+    }
+
+    @Override
+    public void onResize(int width, int height) {
+        if (game != null && width > 0 && height > 0) {
+            game.setWinDim(width, height);
+            game.setAspect((float) width / height);
+        }
     }
 
     public void resume() {

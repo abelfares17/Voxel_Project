@@ -6,6 +6,7 @@ import engine.render.MeshWorkerManager;
 import engine.render.Shader;
 import engine.time.TimeManager;
 import org.joml.Matrix4f;
+import org.joml.FrustumIntersection;
 import org.joml.Vector3f;
 
 import static org.lwjgl.opengl.GL30.*;
@@ -24,6 +25,13 @@ public class World {
     private final MeshWorkerManager meshManager;
     private TimeManager timeManager;
     private final String worldName;
+    private final Matrix4f depthModelMatrix = new Matrix4f();
+    private int depthDrawCalls;
+    private long depthVertices;
+
+    public void resetDepthStats() { depthDrawCalls = 0; depthVertices = 0; }
+    public int getDepthDrawCalls() { return depthDrawCalls; }
+    public long getDepthVertices() { return depthVertices; }
 
     public enum Mode {
         FLAT, PERLIN
@@ -338,25 +346,66 @@ public class World {
     }
 
     public void renderDepth(Shader depthShader) {
-        for (Map.Entry<ChunkPos, Chunk> entry : chunks.entrySet()) {
-            ChunkPos pos = entry.getKey();
-            Chunk chunk = entry.getValue();
+        renderDepth(depthShader, null, -1.0f);
+    }
 
+    /**
+     * Render depth for shadow mapping with conservative cascade distance culling.
+     *
+     * @param depthShader Shader used for shadow depth pass
+     * @param center World-space center of the cascade bounding volume (nullable)
+     * @param radius Maximum conservative radius for chunks casting/receiving shadows (negative = no culling)
+     */
+    public void renderDepth(Shader depthShader, Vector3f center, float radius) {
+        renderDepth(depthShader, center, radius, null);
+    }
+
+    /** Optional light-space frustum, never the camera frustum: off-screen casters stay eligible. */
+    public void renderDepth(Shader depthShader, Vector3f center, float radius, FrustumIntersection lightFrustum) {
+        float radiusSq = radius > 0 ? radius * radius : -1.0f;
+        float centerX = center != null ? center.x : 0.0f;
+        float centerZ = center != null ? center.z : 0.0f;
+
+        for (Chunk chunk : chunks.values()) {
             if (!chunk.isReady()) continue; // le mesh n’est pas encore prêt
             int vao = chunk.getVao();
             int vertexCount = chunk.getVertexCount();
             if (vao == -1 || vertexCount == 0) continue;
 
-            int worldX = pos.getWorldX();
-            int worldZ = pos.getWorldZ();
-            Matrix4f modelMatrix = new Matrix4f().translate(worldX, 0, worldZ);
-            depthShader.setMat4("modelMatrix", modelMatrix);
+            int worldX = chunk.getChunkX() * Chunk.WIDTH;
+            int worldZ = chunk.getChunkZ() * Chunk.DEPTH;
+
+            if (radiusSq > 0) {
+                float midX = worldX + (Chunk.WIDTH * 0.5f);
+                float midZ = worldZ + (Chunk.DEPTH * 0.5f);
+                float dx = midX - centerX;
+                float dz = midZ - centerZ;
+                if (dx * dx + dz * dz > radiusSq) {
+                    continue;
+                }
+            }
+
+            if (lightFrustum != null && !intersectsShadowFrustum(lightFrustum, worldX, worldZ)) {
+                continue;
+            }
+
+            depthModelMatrix.translation(worldX, 0, worldZ);
+            depthShader.setMat4("modelMatrix", depthModelMatrix);
 
             glBindVertexArray(vao);
             glDrawArrays(GL_TRIANGLES, 0, vertexCount);
+            depthDrawCalls++;
+            depthVertices += vertexCount;
         }
 
         glBindVertexArray(0);
+    }
+
+    /** Full chunk bounds, including the top face at HEIGHT; padding keeps boundary cases conservative. */
+    static boolean intersectsShadowFrustum(FrustumIntersection frustum, float worldX, float worldZ) {
+        final float padding = 0.01f;
+        return frustum.testAab(worldX - padding, -padding, worldZ - padding,
+                worldX + Chunk.WIDTH + padding, Chunk.HEIGHT + padding, worldZ + Chunk.DEPTH + padding);
     }
 
     private Chunk getOrGenerateChunk(int x, int z) {
@@ -418,6 +467,11 @@ public class World {
 
         // Shutdown storage executor
         storage.shutdown();
-    }
 
+        // Détruire tous les meshes GPU des chunks actifs
+        for (Chunk chunk : chunks.values()) {
+            chunk.cleanup();
+        }
+        chunks.clear();
+        }
 }

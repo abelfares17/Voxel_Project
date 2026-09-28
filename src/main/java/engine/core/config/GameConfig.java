@@ -28,8 +28,34 @@ public class GameConfig {
     /** Enable/disable window resizing */
     public static final boolean WINDOW_RESIZABLE = true;
 
+    /** Initial logical size relative to the desktop-constrained full window; Retina stays enabled. */
+    public static final float WINDOW_SCALE = readWindowScale();
+
+    private static float readWindowScale() {
+        float scale = Float.parseFloat(System.getProperty("voxel.windowScale", "0.75"));
+        if (!Float.isFinite(scale) || scale < 0.25f || scale > 1.0f) {
+            throw new IllegalArgumentException("voxel.windowScale must be in [0.25, 1.0]");
+        }
+        return scale;
+    }
+
+    /**
+     * Enable Retina framebuffer on macOS (true = native resolution, required for correct Cocoa/OpenGL viewport on macOS).
+     */
+    public static final boolean RETINA_FRAMEBUFFER_ENABLED = true;
+
     /** Enable V-Sync (1 = enabled, 0 = disabled) */
     public static final int VSYNC_ENABLED = 0;
+
+
+    // === TIME CONFIGURATION ===
+
+    /**
+     * Day/night cycle speed multiplier.
+     * 0.1f = normal 1x game speed (10x slower than 1.0f test speed, 1 cycle = 6000s = 100 min).
+     * 1.0f = fast test speed (1 cycle = 600s = 10 min).
+     */
+    public static final float SUN_SPEED_MULTIPLIER = 1.0f;
 
 
     // === OPENGL CONFIGURATION ===
@@ -169,6 +195,28 @@ public class GameConfig {
     /** Print framebuffer size on initialization */
     public static final boolean DEBUG_FRAMEBUFFER_SIZE = true;
 
+    /**
+     * Active le traqueur de fuites mémoire natives de LWJGL (DebugAllocator).
+     * Désactivé par défaut (false) pour éviter les logs de chargement de bibliothèques dans le terminal.
+     * Mettre à true uniquement pour une session de diagnostic de fuites mémoire.
+     */
+    public static final boolean DEBUG_MEMORY_ALLOCATOR = false;
+
+
+    // === PERFORMANCE LOGGING ===
+
+    /**
+     * Enable CSV performance logging to file (logs/perf_test_*.csv) during normal gameplay.
+     * Records frame times, FPS, and player position for performance analysis without terminal spam.
+     */
+    public static final boolean PERF_LOG_ENABLED = true;
+
+    /**
+     * Frequency of CSV logging in frames (e.g. 60 = 1 record every ~1 sec at 60 FPS / ~0.5 sec at 120 FPS).
+     * Prevents giant log files and excessive disk writes.
+     */
+    public static final int PERF_LOG_FREQUENCY = 60;
+
 
     // === TEST HARNESS ===
 
@@ -182,7 +230,7 @@ public class GameConfig {
      * - Logs performance metrics to CSV
      * When false: normal game behavior (unchanged)
      */
-    public static final boolean TEST_HARNESS_ENABLED = false;
+    public static final boolean TEST_HARNESS_ENABLED = Boolean.getBoolean("voxel.testHarness");
 
     /** Name of the test world to load when harness is enabled */
     public static final String TEST_WORLD_NAME = "World 10";

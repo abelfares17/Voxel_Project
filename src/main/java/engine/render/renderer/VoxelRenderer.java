@@ -1,42 +1,18 @@
 package engine.render.renderer;
 
+import org.joml.FrustumIntersection;
 import org.joml.Matrix4f;
 import org.joml.Vector3f;
-import static org.lwjgl.opengl.GL11.GL_BACK;
-import static org.lwjgl.opengl.GL11.GL_BLEND;
-import static org.lwjgl.opengl.GL11.GL_CCW;
-import static org.lwjgl.opengl.GL11.GL_CULL_FACE;
-import static org.lwjgl.opengl.GL11.GL_DEPTH_TEST;
-import static org.lwjgl.opengl.GL11.GL_LEQUAL;
-import static org.lwjgl.opengl.GL11.GL_LESS;
-import static org.lwjgl.opengl.GL11.GL_NO_ERROR;
-import static org.lwjgl.opengl.GL11.GL_SCISSOR_TEST;
-import static org.lwjgl.opengl.GL11.GL_TEXTURE_2D;
-import static org.lwjgl.opengl.GL11.glBindTexture;
-import static org.lwjgl.opengl.GL11.glColorMask;
-import static org.lwjgl.opengl.GL11.glCullFace;
-import static org.lwjgl.opengl.GL11.glDepthFunc;
-import static org.lwjgl.opengl.GL11.glDepthMask;
-import static org.lwjgl.opengl.GL11.glDisable;
-import static org.lwjgl.opengl.GL11.glEnable;
-import static org.lwjgl.opengl.GL11.glFrontFace;
-import static org.lwjgl.opengl.GL11.glGetError;
-import static org.lwjgl.opengl.GL11.glTexParameteri;
-import static org.lwjgl.opengl.GL11.glViewport;
-import static org.lwjgl.opengl.GL13.GL_TEXTURE0;
-import static org.lwjgl.opengl.GL13.glActiveTexture;
-import static org.lwjgl.opengl.GL14.GL_COMPARE_R_TO_TEXTURE;
-import static org.lwjgl.opengl.GL14.GL_TEXTURE_COMPARE_FUNC;
-import static org.lwjgl.opengl.GL14.GL_TEXTURE_COMPARE_MODE;
-import static org.lwjgl.opengl.GL11.GL_NONE;
-import static org.lwjgl.opengl.GL30.GL_FRAMEBUFFER;
-import static org.lwjgl.opengl.GL30.GL_TEXTURE_2D_ARRAY;
-import static org.lwjgl.opengl.GL30.glBindFramebuffer;
+import static org.lwjgl.opengl.GL11.*;
+import static org.lwjgl.opengl.GL13.*;
+import static org.lwjgl.opengl.GL14.*;
+import static org.lwjgl.opengl.GL30.*;
 
 import engine.core.config.GameConfig;
 import engine.core.config.RenderConfig;
 import engine.render.MeshBuilder;
 import engine.render.Shader;
+import engine.render.camera.Camera;
 import engine.render.camera.PerspectiveCamera;
 import engine.render.core.RenderContext;
 import engine.render.shadow.CascadeData;
@@ -71,7 +47,11 @@ public class VoxelRenderer implements Renderer {
     private static final int BIAS_MODE_COUNT = 4;
 
     // Normal-offset shadow mode (0=off, 1=on)
-    private int normalOffsetMode = 0;
+    private int normalOffsetMode = 1;
+
+    private final Matrix4f chunkModelMatrix = new Matrix4f();
+    private final Matrix4f projViewMatrix = new Matrix4f();
+    private final FrustumIntersection cameraFrustum = new FrustumIntersection();
 
     // Temporal jitter frame counter for shadow anti-aliasing
     private int frameIndex = 0;
@@ -86,15 +66,30 @@ public class VoxelRenderer implements Renderer {
         this.atlasTextureId = atlasTextureId;
     }
 
-    private void drainGLErrors() {
-        while (glGetError() != GL_NO_ERROR) {
-            // Silently drain errors
-        }
+    public static void checkGLErrors(String location) {
+    checkGLError(location);
+}
+
+    public static void checkGLError(String location) {
+    int error;
+    while ((error = glGetError()) != GL_NO_ERROR) {
+        String errorName = switch (error) {
+            case GL_INVALID_ENUM -> "GL_INVALID_ENUM";
+            case GL_INVALID_VALUE -> "GL_INVALID_VALUE";
+            case GL_INVALID_OPERATION -> "GL_INVALID_OPERATION";
+            case GL_STACK_OVERFLOW -> "GL_STACK_OVERFLOW";
+            case GL_STACK_UNDERFLOW -> "GL_STACK_UNDERFLOW";
+            case GL_OUT_OF_MEMORY -> "GL_OUT_OF_MEMORY";
+            case GL_INVALID_FRAMEBUFFER_OPERATION -> "GL_INVALID_FRAMEBUFFER_OPERATION";
+            default -> "0x" + Integer.toHexString(error);
+        };
+        System.err.println("[GL ERROR] " + errorName + " at: " + location);
     }
+}
 
     @Override
     public void render(RenderContext context) {
-        drainGLErrors();
+        checkGLErrors("VoxelRender.render() entry point");
 
         SunData sunData = context.getWorld().getTimeManager().getSunData();
         Vector3f sunDir = context.getSunDirLighting();
@@ -206,20 +201,10 @@ public class VoxelRenderer implements Renderer {
         voxelShader.setUniform("atlasOffsetA", shadowRenderer.getAtlasOffsetA());
         voxelShader.setUniform("atlasOffsetB", shadowRenderer.getAtlasOffsetB());
 
-        // Bind GL_R32F color test array (micro-test A — texture unit 2)
-        voxelShader.setTextureArray("colorTestArray", shadowRenderer.getColorTestArray(), 2);
-
-        // Hardware shadow compare (micro-tests stages 14-15 only).
-        // We temporarily set GL_COMPARE_REF_TO_TEXTURE on the atlas, bind it on unit 3
-        // as shadowAtlasShadow, then restore GL_NONE after rendering.
-        // This is safe: the shadow depth pass never reads the atlas.
-        int atlasId = shadowRenderer.getShadowAtlas();
-        glActiveTexture(GL_TEXTURE0 + 3);
-        glBindTexture(GL_TEXTURE_2D_ARRAY, atlasId);
-        glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_COMPARE_MODE, GL_COMPARE_R_TO_TEXTURE);
-        glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_COMPARE_FUNC, GL_LEQUAL);
-        voxelShader.setUniform("shadowAtlasShadow", 3);
-        glActiveTexture(GL_TEXTURE0);
+        // Bind GL_R32F color test array if allocated (micro-test A — texture unit 2)
+        if (shadowRenderer.getColorTestArray() != 0) {
+            voxelShader.setTextureArray("colorTestArray", shadowRenderer.getColorTestArray(), 2);
+        }
 
         // Upload pending meshes
         context.getWorld().getMeshManager().uploadMeshesIfAny();
@@ -227,17 +212,27 @@ public class VoxelRenderer implements Renderer {
         // Render chunks
         renderVisibleChunks(context);
 
-        // Restore GL_NONE compare mode on the atlas (required for manual depth reads in other stages)
-        glActiveTexture(GL_TEXTURE0 + 3);
-        glBindTexture(GL_TEXTURE_2D_ARRAY, atlasId);
-        glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_COMPARE_MODE, GL_NONE);
-        glActiveTexture(GL_TEXTURE0);
-
         voxelShader.unbind();
     }
 
+    private int drawCalls;
+    private long drawnVertices;
+
+    public int getDrawCalls() { return drawCalls; }
+    public long getDrawnVertices() { return drawnVertices; }
+
     private void renderVisibleChunks(RenderContext context) {
-        Vector3f camPos = context.getCamera().getPosition();
+        drawCalls = 0;
+        drawnVertices = 0;
+        Camera camera = context.getCamera();
+        Vector3f camPos = camera.getPosition();
+        Matrix4f viewMatrix = (camera instanceof PerspectiveCamera pc) ? pc.getViewMatrix() : camera.getViewMatrix(camPos, 0, 0);
+        Matrix4f projMatrix = camera.getProjectionMatrix();
+
+        // Compute 3D camera frustum
+        projViewMatrix.set(projMatrix).mul(viewMatrix);
+        cameraFrustum.set(projViewMatrix);
+
         int cx = (int) Math.floor(camPos.x / GameConfig.CHUNK_WIDTH);
         int cz = (int) Math.floor(camPos.z / GameConfig.CHUNK_DEPTH);
 
@@ -245,26 +240,38 @@ public class VoxelRenderer implements Renderer {
 
         for (int dx = -radius; dx <= radius; dx++) {
             for (int dz = -radius; dz <= radius; dz++) {
-                Chunk chunk = context.getWorld().getChunk(cx + dx, cz + dz);
-                if (chunk == null) continue;
+                int targetChunkX = cx + dx;
+                int targetChunkZ = cz + dz;
 
-                Matrix4f model = new Matrix4f()
-                        .translation(
-                                chunk.getChunkX() * Chunk.WIDTH,
-                                0,
-                                chunk.getChunkZ() * Chunk.DEPTH
-                        );
+                float minX = targetChunkX * Chunk.WIDTH;
+                float minY = -32.0f;
+                float minZ = targetChunkZ * Chunk.DEPTH;
+                float maxX = minX + Chunk.WIDTH;
+                float maxY = 288.0f;
+                float maxZ = minZ + Chunk.DEPTH;
 
-                voxelShader.setUniform("modelMatrix", model);
+                // 3D View frustum culling: guarantees zero pop-in regardless of pitch / height
+                if (!cameraFrustum.testAab(minX, minY, minZ, maxX, maxY, maxZ)) {
+                    continue;
+                }
+
+                Chunk chunk = context.getWorld().getChunk(targetChunkX, targetChunkZ);
+                if (chunk == null || !chunk.isReady()) continue;
+
+                chunkModelMatrix.translation(minX, 0, minZ);
+                voxelShader.setUniform("modelMatrix", chunkModelMatrix);
                 MeshBuilder.renderChunk(chunk);
+                if (chunk.getVao() > 0 && chunk.getVertexCount() > 0) {
+                    drawCalls++;
+                    drawnVertices += chunk.getVertexCount();
+                }
             }
         }
     }
 
     @Override
     public void cleanup() {
-        voxelShader.cleanup();
-        shadowRenderer.cleanup();
+        
     }
 
     public ShadowRenderer getShadowRenderer() {

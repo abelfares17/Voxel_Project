@@ -1,0 +1,15 @@
+Analysis of VoxelRenderer::render(RenderContext context) :
+
+drainGLerrors() : What does it do ? Does it have the potential to slow down the rendering pipeline ?
+
+First off it seems there may be an incoherence in the way the sun direction is computed.
+float sunY = sunData.sunY(); Computed in TimeManager with  : float sunY = (float) Math.sin(angle); angle being computed from the timeofday.
+
+sunDir could be pulled from the sunData created in TimeManager, however it is instead pulled from the context with : 
+Vector3f sunDir = context.getSunDirLighting(); 
+
+This sundirection is set in the context in Game.render() with :
+context.setSunDirLighting(world.getTimeManager().getSunData().sunDir());
+ This means that the sun direction is computed twice, once in TimeManager and once in Game.render(). This could lead to inconsistencies if the time of day changes between these two calls. 
+ It would be more efficient and consistent to compute the sun direction once in TimeManager and use that value throughout the rendering pipeline.
+

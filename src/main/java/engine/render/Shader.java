@@ -33,6 +33,8 @@ public class Shader {
         // Bind des attributs AVANT le link
         glBindAttribLocation(programId, 0, "aPos");
         glBindAttribLocation(programId, 1, "aTex");
+        glBindAttribLocation(programId, 1, "aUV");        // TextRenderer (text_vertex.glsl)
+        glBindAttribLocation(programId, 1, "aTexCoord");  // UIRenderer (ui_vertex.glsl)
         glBindAttribLocation(programId, 2, "aNormal");
         glBindAttribLocation(programId, 3, "aAO");
 

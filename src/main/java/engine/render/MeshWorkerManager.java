@@ -92,5 +92,11 @@ public class MeshWorkerManager {
 
     public void shutdown() {
         executor.shutdownNow();
+        // Vider la file pour libérer la mémoire non uploadée
+        MeshData data;
+        while((data = uploadQueue.poll()) != null){
+            data.free();
+        }
+        queuedSet.clear();
     }
 }
