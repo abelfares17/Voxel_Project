@@ -60,19 +60,19 @@ void main() {
                 // The offset scales with:
                 // 1. Cascade texel size (larger offset for coarser cascades)
                 // 2. Angle between normal and light (more offset at grazing angles)
-                float NdotL = dot(worldNormal, sunDir);
-                float sinTheta = sqrt(1.0 - NdotL * NdotL);  // sin of angle to light
+                float NdotL = clamp(dot(worldNormal, sunDir), 0.0, 1.0);
+                float sinTheta = sqrt(max(1.0 - NdotL * NdotL, 0.0));  // sin of angle to light
 
                 // Offset magnitude: larger at grazing angles, scaled by texel size
-                float offsetScale = 1.0;  // Tunable multiplier
-                float offset = cascadeTexelSizes[i] * offsetScale * sinTheta;
+                float offsetScale = 0.6;  // Tunable multiplier (moderate offset to prevent shadow detachment)
+                float offset = cascadeTexelSizes[i] * offsetScale * (0.25 + 0.75 * sinTheta);
 
                 // Apply offset along normal (primary)
                 shadowWorld = vec4(world.xyz + worldNormal * offset, 1.0);
 
                 // Apply offset for secondary (use secondary texel sizes if leapfrog active)
                 if (leapfrogActive == 1) {
-                    float offsetB = cascadeTexelSizesB[i] * offsetScale * sinTheta;
+                    float offsetB = cascadeTexelSizesB[i] * offsetScale * (0.25 + 0.75 * sinTheta);
                     shadowWorldB = vec4(world.xyz + worldNormal * offsetB, 1.0);
                 }
             }

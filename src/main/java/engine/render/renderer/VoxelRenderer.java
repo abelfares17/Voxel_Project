@@ -89,6 +89,11 @@ public class VoxelRenderer implements Renderer {
 
     @Override
     public void render(RenderContext context) {
+        render(context, RenderConfig.TIGHT_CAMERA_BOUNDS, true);
+    }
+
+    /** Diagnostic replay can keep the same meshes and temporal sample as the preceding draw. */
+    public void render(RenderContext context, boolean tightBounds, boolean advanceFrame) {
         checkGLErrors("VoxelRender.render() entry point");
 
         SunData sunData = context.getWorld().getTimeManager().getSunData();
@@ -151,8 +156,7 @@ public class VoxelRenderer implements Renderer {
         voxelShader.setUniform("normalOffsetMode", normalOffsetMode);
 
         // Temporal jitter
-        voxelShader.setUniform("frameIndex", frameIndex);
-        frameIndex = (frameIndex + 1) % 8;
+        voxelShader.setUniform("frameIndex", advanceFrame ? frameIndex : (frameIndex + 7) % 8);
 
         // CSM uniforms
         CascadeData cascadeData = shadowRenderer.getCascadeData();
@@ -207,10 +211,11 @@ public class VoxelRenderer implements Renderer {
         }
 
         // Upload pending meshes
-        context.getWorld().getMeshManager().uploadMeshesIfAny();
+        if (advanceFrame) context.getWorld().getMeshManager().uploadMeshesIfAny();
 
         // Render chunks
-        renderVisibleChunks(context);
+        renderVisibleChunks(context, tightBounds);
+        if (advanceFrame) frameIndex = (frameIndex + 1) % 8;
 
         voxelShader.unbind();
     }
@@ -221,7 +226,7 @@ public class VoxelRenderer implements Renderer {
     public int getDrawCalls() { return drawCalls; }
     public long getDrawnVertices() { return drawnVertices; }
 
-    private void renderVisibleChunks(RenderContext context) {
+    private void renderVisibleChunks(RenderContext context, boolean tightBounds) {
         drawCalls = 0;
         drawnVertices = 0;
         Camera camera = context.getCamera();
@@ -250,20 +255,22 @@ public class VoxelRenderer implements Renderer {
                 float maxY = 288.0f;
                 float maxZ = minZ + Chunk.DEPTH;
 
-                // 3D View frustum culling: guarantees zero pop-in regardless of pitch / height
+                // Preserve the existing broad-phase test and legacy fallback.
                 if (!cameraFrustum.testAab(minX, minY, minZ, maxX, maxY, maxZ)) {
                     continue;
                 }
 
                 Chunk chunk = context.getWorld().getChunk(targetChunkX, targetChunkZ);
                 if (chunk == null || !chunk.isReady()) continue;
+                if (tightBounds && chunk.getMeshBounds() != null
+                        && !chunk.getMeshBounds().intersects(cameraFrustum, minX, minZ)) continue;
 
                 chunkModelMatrix.translation(minX, 0, minZ);
                 voxelShader.setUniform("modelMatrix", chunkModelMatrix);
                 MeshBuilder.renderChunk(chunk);
                 if (chunk.getVao() > 0 && chunk.getVertexCount() > 0) {
                     drawCalls++;
-                    drawnVertices += chunk.getVertexCount();
+                    drawnVertices += chunk.getDrawCount();
                 }
             }
         }

@@ -2,6 +2,7 @@
 package engine.world;
 
 import java.util.Arrays;
+import engine.render.MeshBounds;
 
 /**
  * Représente un chunk de taille fixe WIDTH×HEIGHT×DEPTH.
@@ -17,10 +18,12 @@ public class Chunk {
     private final short[][][] blocks = new short[WIDTH][HEIGHT][DEPTH];
 
     // VAO/VBO + vertexCount pour le mesh interleavé
-    // Volatile for thread safety: written by worker threads, read by render thread
+    // GPU mesh and its bounds are installed together on the GL thread.
     private volatile int vao;
     private volatile int vbo;
     private volatile int vertexCount;
+    private int ebo, indexCount;
+    private volatile MeshBounds meshBounds;
 
     // true si le mesh doit être reconstruit avant d'être rendu
     private volatile boolean meshDirty = true;
@@ -131,6 +134,17 @@ public class Chunk {
      * Set meshDirty à false pour indiquer que le mesh est à jour.
      */
     public void setMesh(int newVao, int newVbo, int vertexCount) {
+        setMesh(newVao, newVbo, vertexCount, null);
+    }
+
+    public void setMesh(int newVao, int newVbo, int vertexCount, MeshBounds bounds) {
+        setMesh(newVao, newVbo, vertexCount, bounds, 0, 0);
+    }
+
+    public void setMesh(int newVao, int newVbo, int vertexCount, MeshBounds bounds, int newEbo, int indexCount) {
+        if (ebo != 0 && ebo != newEbo) org.lwjgl.opengl.GL15.glDeleteBuffers(ebo);
+        this.ebo = newEbo;
+        this.indexCount = indexCount;
         //Libérez les buffers avant de les écraser
         if (this.vao != 0 && this.vao != newVao) {
             org.lwjgl.opengl.GL30.glDeleteVertexArrays(this.vao);
@@ -141,6 +155,7 @@ public class Chunk {
         this.vao = newVao;
         this.vbo = newVbo;
         this.vertexCount = vertexCount;
+        this.meshBounds = vertexCount > 0 ? bounds : null;
         this.meshDirty = false;
         //System.out.println("setMesh: vao=" + vao + " vbo=" + vbo + " count=" + vertexCount);
     }
@@ -157,7 +172,19 @@ public class Chunk {
         return vertexCount;
     }
 
+    public int getEbo() { return ebo; }
+    public int getIndexCount() { return indexCount; }
+    public int getDrawCount() { return ebo == 0 ? vertexCount : indexCount; }
+    public long getMeshBytes() { return (long) vertexCount * 36 + (long) indexCount * Integer.BYTES; }
+
+    public MeshBounds getMeshBounds() {
+        return meshBounds;
+    }
+
     public void cleanup() {
+        if (ebo != 0) org.lwjgl.opengl.GL15.glDeleteBuffers(ebo);
+        ebo = 0;
+        indexCount = 0;
         if (vao != 0) {
             org.lwjgl.opengl.GL30.glDeleteVertexArrays(vao);
             vao = 0;
@@ -167,6 +194,7 @@ public class Chunk {
             vbo = 0;
         }
         vertexCount = 0;
+        meshBounds = null;
         meshDirty = true;
     }
 }

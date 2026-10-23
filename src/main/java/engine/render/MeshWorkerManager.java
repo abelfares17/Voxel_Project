@@ -81,10 +81,11 @@ public class MeshWorkerManager {
             glEnableVertexAttribArray(3);
             glVertexAttribPointer(3, 1, GL_FLOAT, false, STRIDE, (long)((3 + 2 + 3) * Float.BYTES));
 
+            int ebo = MeshBuilder.uploadIndices(data);
             glBindVertexArray(0);
             glBindBuffer(GL_ARRAY_BUFFER, 0);
 
-            data.chunk.setMesh(vao, vbo, data.vertexCount);
+            data.chunk.setMesh(vao, vbo, data.vertexCount, data.bounds, ebo, data.indexCount);
             //System.out.println("[MeshWorkerManager] Mesh uploaded and ready for chunk: " + data.chunk.getChunkX() + "," + data.chunk.getChunkZ());
             data.free();
         }

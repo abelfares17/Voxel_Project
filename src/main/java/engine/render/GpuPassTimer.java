@@ -52,7 +52,7 @@ public final class GpuPassTimer implements AutoCloseable {
                 DateTimeFormatter.ofPattern("yyyy-MM-dd_HHmmss_SSS")) + ".csv");
         Files.createDirectories(path.getParent());
         writer = new PrintWriter(Files.newBufferedWriter(path));
-        writer.println("frameIndex,elapsed_s,fb_width,fb_height,time_of_day,pos_x,pos_y,pos_z,shadow_frustum_culling,"
+        writer.println("frameIndex,elapsed_s,fb_width,fb_height,time_of_day,pos_x,pos_y,pos_z,shadow_frustum_culling,tight_shadow_bounds,tight_camera_bounds,indexed_meshes,"
                 + "shadow_draws,shadow_vertices,voxel_draws,voxel_vertices,"
                 + "gpu_shadow_ms,gpu_sky_sun_ms,gpu_voxel_ms,gpu_ui_ms");
         for (int i = 0; i < slots.length; i++) {
@@ -79,7 +79,9 @@ public final class GpuPassTimer implements AutoCloseable {
         slot.metadata = String.format(Locale.ROOT, "%d,%.6f,%d,%d,%.7f,%.3f,%.3f,%.3f",
                 frame, elapsed, context.getWindowWidth(), context.getWindowHeight(),
                 context.getTimeOfDay(), pos.x, pos.y, pos.z)
-                + "," + RenderConfig.SHADOW_FRUSTUM_CULLING_ENABLED;
+                + "," + RenderConfig.SHADOW_FRUSTUM_CULLING_ENABLED
+                + "," + RenderConfig.TIGHT_SHADOW_BOUNDS + "," + RenderConfig.TIGHT_CAMERA_BOUNDS
+                + "," + RenderConfig.INDEXED_MESHES;
     }
 
     public void beginPass(Pass pass) {

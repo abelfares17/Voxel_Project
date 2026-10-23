@@ -12,6 +12,15 @@ import org.joml.Vector3f;
  * - Fog settings
  */
 public class RenderConfig {
+    /** Per-mesh uint32 indices; override false for the non-indexed benchmark reference. */
+    public static final boolean INDEXED_MESHES =
+            Boolean.parseBoolean(System.getProperty("voxel.indexedMeshes", "true"));
+    // Implemented and validated, but opt-in: the mobile ABBA runs showed no robust FPS gain.
+    // See docs/Rapport_AABB_meshes_2026-10-22.md. Bounds are still computed at mesh generation.
+    public static final boolean TIGHT_SHADOW_BOUNDS =
+            Boolean.parseBoolean(System.getProperty("voxel.tightShadowBounds", "false"));
+    public static final boolean TIGHT_CAMERA_BOUNDS =
+            Boolean.parseBoolean(System.getProperty("voxel.tightCameraBounds", "false"));
 
     // === CAMERA CONFIGURATION ===
 

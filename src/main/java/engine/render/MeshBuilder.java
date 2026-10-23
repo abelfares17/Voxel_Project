@@ -36,71 +36,79 @@ public class MeshBuilder {
     // CPU shadow (LIGHT_SIZE) removed - GPU shadow mapping only
     public static final int STRIDE = (POS_SIZE + TEX_SIZE + NOR_SIZE + AO_SIZE) * FLOAT_SIZE;
     public static MeshData generateMeshData(Chunk chunk, World world) {
+        return generateMeshData(chunk, world, engine.core.config.RenderConfig.INDEXED_MESHES);
+    }
+
+    public static MeshData generateMeshData(Chunk chunk, World world, boolean indexed) {
         List<Quad> quads = generateVisibleQuads(chunk, world);
-        int vertexCount = quads.size() * 6;
+        int vertexCount = Math.multiplyExact(quads.size(), indexed ? 4 : 6);
         FloatBuffer fb = org.lwjgl.system.MemoryUtil.memAllocFloat(vertexCount * (POS_SIZE + TEX_SIZE + NOR_SIZE + AO_SIZE));
-        for (Quad q : quads) {
-            // Triangle 1: v0→v1→v2 (CCW when viewed from outside)
-            putVertex(fb, q.v0);
-            putVertex(fb, q.v1);
-            putVertex(fb, q.v2);
-            // Triangle 2: v0→v2→v3 (CCW when viewed from outside)
-            putVertex(fb, q.v0);
-            putVertex(fb, q.v2);
-            putVertex(fb, q.v3);
+        java.nio.IntBuffer indices = null;
+        try {
+            if (indexed) indices = MemoryUtil.memAllocInt(Math.multiplyExact(quads.size(), 6));
+            int base = 0;
+            for (Quad q : quads) {
+                // Triangle 1: v0→v1→v2 (CCW when viewed from outside)
+                putVertex(fb, q.v0);
+                putVertex(fb, q.v1);
+                putVertex(fb, q.v2);
+                // Triangle 2: v0→v2→v3 (CCW when viewed from outside)
+                if (!indexed) {
+                    putVertex(fb, q.v0);
+                    putVertex(fb, q.v2);
+                } else {
+                    indices.put(base).put(base + 1).put(base + 2).put(base).put(base + 2).put(base + 3);
+                    base += 4;
+                }
+                putVertex(fb, q.v3);
+            }
+            fb.flip();
+            if (indices != null) indices.flip();
+            return new MeshData(fb, vertexCount, chunk, MeshBounds.fromVertices(fb, vertexCount), indices);
+        } catch (RuntimeException | Error failure) {
+            if (indices != null) MemoryUtil.memFree(indices);
+            MemoryUtil.memFree(fb);
+            throw failure;
         }
-        fb.flip();
-        //System.out.println("[MeshBuilder] End mesh for chunk: " + chunk.getChunkX() + "," + chunk.getChunkZ());
-        return new MeshData(fb, vertexCount, chunk);
     }
 
     public static void buildChunkMesh(Chunk chunk, World world) {
         chunk.cleanup();
-        List<Quad> quads = generateVisibleQuads(chunk, world);
-        int vertexCount  = quads.size() * 6; // 2 triangles par quad
+        MeshData data = generateMeshData(chunk, world);
+        FloatBuffer fb = data.vertexBuffer;
+        try {
 
-        FloatBuffer fb = MemoryUtil.memAllocFloat(vertexCount * (POS_SIZE + TEX_SIZE + NOR_SIZE + AO_SIZE));
-        for (Quad q : quads) {
-            // Triangle 1: v0→v1→v2 (CCW when viewed from outside)
-            putVertex(fb, q.v0);
-            putVertex(fb, q.v1);
-            putVertex(fb, q.v2);
-            // Triangle 2: v0→v2→v3 (CCW when viewed from outside)
-            putVertex(fb, q.v0);
-            putVertex(fb, q.v2);
-            putVertex(fb, q.v3);
+            int vao = glGenVertexArrays();
+            glBindVertexArray(vao);
+
+            int vbo = glGenBuffers();
+            glBindBuffer(GL_ARRAY_BUFFER, vbo);
+            glBufferData(GL_ARRAY_BUFFER, fb, GL_STATIC_DRAW);
+
+            // Attrib position (location = 0)
+            glEnableVertexAttribArray(0);
+            glVertexAttribPointer(0, POS_SIZE, GL_FLOAT, false, STRIDE, 0);
+
+            // Attrib texcoord (location = 1)
+            glEnableVertexAttribArray(1);
+            glVertexAttribPointer(1, TEX_SIZE, GL_FLOAT, false, STRIDE, POS_SIZE * FLOAT_SIZE);
+
+            // Attrib normal (location = 2)
+            glEnableVertexAttribArray(2);
+            glVertexAttribPointer(2, NOR_SIZE, GL_FLOAT, false, STRIDE, (POS_SIZE + TEX_SIZE) * FLOAT_SIZE);
+
+            // Attrib AO (location = 3)
+            glEnableVertexAttribArray(3);
+            glVertexAttribPointer(3, AO_SIZE, GL_FLOAT, false, STRIDE, (POS_SIZE + TEX_SIZE + NOR_SIZE) * FLOAT_SIZE);
+
+            int ebo = uploadIndices(data);
+            glBindVertexArray(0);
+            glBindBuffer(GL_ARRAY_BUFFER, 0);
+
+            chunk.setMesh(vao, vbo, data.vertexCount, data.bounds, ebo, data.indexCount);
+        } finally {
+            data.free();
         }
-        fb.flip();
-
-        int vao = glGenVertexArrays();
-        glBindVertexArray(vao);
-
-        int vbo = glGenBuffers();
-        glBindBuffer(GL_ARRAY_BUFFER, vbo);
-        glBufferData(GL_ARRAY_BUFFER, fb, GL_STATIC_DRAW);
-
-        // Attrib position (location = 0)
-        glEnableVertexAttribArray(0);
-        glVertexAttribPointer(0, POS_SIZE, GL_FLOAT, false, STRIDE, 0);
-
-        // Attrib texcoord (location = 1)
-        glEnableVertexAttribArray(1);
-        glVertexAttribPointer(1, TEX_SIZE, GL_FLOAT, false, STRIDE, POS_SIZE * FLOAT_SIZE);
-
-        // Attrib normal (location = 2)
-        glEnableVertexAttribArray(2);
-        glVertexAttribPointer(2, NOR_SIZE, GL_FLOAT, false, STRIDE, (POS_SIZE + TEX_SIZE) * FLOAT_SIZE);
-
-        // Attrib AO (location = 3)
-        glEnableVertexAttribArray(3);
-        glVertexAttribPointer(3, AO_SIZE, GL_FLOAT, false, STRIDE, (POS_SIZE + TEX_SIZE + NOR_SIZE) * FLOAT_SIZE);
-
-        glBindVertexArray(0);
-        glBindBuffer(GL_ARRAY_BUFFER, 0);
-
-        MemoryUtil.memFree(fb);
-
-        chunk.setMesh(vao, vbo, vertexCount);
         //System.out.println("Chunk ("+chunk.getChunkX()+","+chunk.getChunkZ()+"): quads=" + quads.size());
     }
 
@@ -109,8 +117,25 @@ public class MeshBuilder {
             return;
         }
         glBindVertexArray(chunk.getVao());
-        glDrawArrays(GL_TRIANGLES, 0, chunk.getVertexCount());
+        drawBoundChunk(chunk);
         glBindVertexArray(0);
+    }
+
+    /** Called with the destination VAO bound; its element binding must remain attached. */
+    public static int uploadIndices(MeshData data) {
+        if (data.indexBuffer == null) return 0;
+        int ebo = glGenBuffers();
+        org.lwjgl.opengl.GL15.glBindBuffer(org.lwjgl.opengl.GL15.GL_ELEMENT_ARRAY_BUFFER, ebo);
+        org.lwjgl.opengl.GL15.glBufferData(org.lwjgl.opengl.GL15.GL_ELEMENT_ARRAY_BUFFER, data.indexBuffer, GL_STATIC_DRAW);
+        return ebo;
+    }
+
+    public static void drawBoundChunk(Chunk chunk) {
+        if (chunk.getEbo() != 0) {
+            org.lwjgl.opengl.GL11.glDrawElements(GL_TRIANGLES, chunk.getIndexCount(), org.lwjgl.opengl.GL11.GL_UNSIGNED_INT, 0L);
+        } else {
+            glDrawArrays(GL_TRIANGLES, 0, chunk.getVertexCount());
+        }
     }
 
     private static void putVertex(FloatBuffer fb, Vertex v) {

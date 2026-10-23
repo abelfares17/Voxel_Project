@@ -2,7 +2,9 @@
 
 Guide d'implémentation manuelle — 28 septembre 2026.
 
-**Statut : proposition vérifiée dans le code, non implémentée et non benchmarkée.** Cette intervention ne change aucun fichier du moteur. Les mesures citées proviennent de la [section 16 du guide de performance](Guide_performance_CSM_Retina.md#16-culling-des-cascades-et-mesures-gpu--28-septembre-2026).
+**Mise à jour du 22 octobre 2026 : implémentation effectuée.** Voir le [rapport d'implémentation et de mesures](Rapport_AABB_meshes_2026-10-22.md) pour les résultats, les limites et les réglages retenus. Le texte ci-dessous conserve le protocole initial : ses hypothèses et chiffres historiques ne sont pas les résultats de cette intervention. Les propriétés `voxel.tightShadowBounds`, `voxel.tightCameraBounds` et `voxel.validateCameraCulling` existent désormais.
+
+Statut lors de la rédaction initiale : proposition vérifiée dans le code, non implémentée et non benchmarkée. Les mesures historiques citées proviennent de la [section 16 du guide de performance](Guide_performance_CSM_Retina.md#16-culling-des-cascades-et-mesures-gpu--28-septembre-2026).
 
 ## 1. Décision : une seule piste principale
 

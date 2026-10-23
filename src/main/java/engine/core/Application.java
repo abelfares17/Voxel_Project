@@ -109,6 +109,10 @@ public class Application {
         glfwWindowHint(GLFW_DECORATED, GameConfig.WINDOW_DECORATED ? GLFW_TRUE : GLFW_FALSE);
 
         // Create window
+        if (GameConfig.TEST_HARNESS_ENABLED) {
+            glfwWindowHint(org.lwjgl.glfw.GLFW.GLFW_FOCUSED, GLFW_FALSE);
+            glfwWindowHint(org.lwjgl.glfw.GLFW.GLFW_FOCUS_ON_SHOW, GLFW_FALSE);
+        }
         long monitor = glfwGetPrimaryMonitor();
         org.lwjgl.glfw.GLFWVidMode vidMode = glfwGetVideoMode(monitor);
         if (vidMode == null) {
@@ -153,7 +157,8 @@ public class Application {
         input = new Input(window, scaler);
 
         // Cursor mode
-        glfwSetInputMode(window, GLFW_CURSOR, GameConfig.INITIAL_CURSOR_MODE);
+        glfwSetInputMode(window, GLFW_CURSOR, GameConfig.TEST_HARNESS_ENABLED
+                ? org.lwjgl.glfw.GLFW.GLFW_CURSOR_NORMAL : GameConfig.INITIAL_CURSOR_MODE);
 
         // Input callbacks
         setupInputCallbacks();

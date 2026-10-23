@@ -49,7 +49,7 @@ public class PerfLogger implements AutoCloseable {
                           "pos_x,pos_y,pos_z,yaw,pitch," +
                           "visibleChunks,renderedVertices," +
                           "shadowPassEnabled,leapfrogEnabled,debugShadowMode,perfBisectStage," +
-                          "shadowFrustumCulling,fbWidth,fbHeight,timeOfDay");
+                          "shadowFrustumCulling,fbWidth,fbHeight,timeOfDay,tightShadowBounds,tightCameraBounds,indexedMeshes,storedVertices,meshBytes,focused,visible,iconified,cursorMode");
 
         System.out.println("Performance logging started: " + csvFilePath);
     }
@@ -78,6 +78,8 @@ public class PerfLogger implements AutoCloseable {
      * @param fbWidth Actual framebuffer width in pixels
      * @param fbHeight Actual framebuffer height in pixels
      * @param timeOfDay Current world time (pose/time are from update; CPU timings describe the previous frame)
+     * @param tightShadowBounds Whether shadow culling uses uploaded mesh bounds
+     * @param tightCameraBounds Whether camera culling uses uploaded mesh bounds
      */
     public void logFrame(int frameIndex, float dt,
                         double updateMs, double renderMs, double swapMs, double glFinishMs,
@@ -87,7 +89,8 @@ public class PerfLogger implements AutoCloseable {
                         int visibleChunks, long renderedVertices,
                         boolean shadowPassEnabled, boolean leapfrogEnabled,
                         int debugShadowMode, String perfBisectStage,
-                        boolean shadowFrustumCulling, int fbWidth, int fbHeight, float timeOfDay) {
+                        boolean shadowFrustumCulling, int fbWidth, int fbHeight, float timeOfDay,
+                        boolean tightShadowBounds, boolean tightCameraBounds, String meshWindowMetrics) {
 
         frameCounter++;
 
@@ -100,14 +103,14 @@ public class PerfLogger implements AutoCloseable {
         csvWriter.printf(Locale.US, "%d,%.4f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%d," +
                         "%.3f,%.3f,%.3f,%.2f,%.2f," +
                         "%d,%d," +
-                        "%b,%b,%d,%s,%b,%d,%d,%.7f%n",
+                        "%b,%b,%d,%s,%b,%d,%d,%.7f,%b,%b,%s%n",
                 frameIndex, dt, updateMs, renderMs, swapMs, glFinishMs, shadowFinishMs,
                 fpsInstant, fpsSmooth,
                 position.x, position.y, position.z, yaw, pitch,
                 visibleChunks, renderedVertices,
                 shadowPassEnabled, leapfrogEnabled, debugShadowMode,
                 perfBisectStage != null ? perfBisectStage : "",
-                shadowFrustumCulling, fbWidth, fbHeight, timeOfDay);
+                shadowFrustumCulling, fbWidth, fbHeight, timeOfDay, tightShadowBounds, tightCameraBounds, meshWindowMetrics);
 
         csvWriter.flush(); // Ensure data is written immediately
 

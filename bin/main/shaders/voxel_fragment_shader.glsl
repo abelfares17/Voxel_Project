@@ -1,13 +1,13 @@
 #version 150
 
-#define PERF_BISECT_STAGE 5
+#define PERF_BISECT_STAGE 6
 // 0 = normal
 // 1 = shading trivial (albedo only)
 // 2 = lighting sans AO/fog/shadow
 // 3 = +AO only
 // 4 = +fog only
 // 5 = +shadow SINGLE A only (1 fetch, depth array, dynamic coords/layer)
-// 6 = +shadow PCF A only (PCF_SAMPLE_COUNT taps)
+// 6 = +shadow PCF A, with cascade blending (SHADOW_FILTER_MODE selects the filter)
 // 7 = +leapfrog transition: A PCF + B SINGLE (PCF+1)
 // 8 = full leapfrog: A PCF + B PCF (2*PCF) but NO dFdx/dFdy
 // 9 = full original (including dFdx/dFdy hybrid)
@@ -23,10 +23,10 @@
 // ═══════════════════════════════════════════════════════════════════════════════
 // SHADOW FILTER MODE (compile-time constant)
 // ═══════════════════════════════════════════════════════════════════════════════
-// 0 = Single sample (reference - no filtering)
-// 1 = Current PCF (Poisson disk, world-jittered rotation)
-// 2 = World-stable PCF (NEW - pattern locked to world grid)
-#define SHADOW_FILTER_MODE 2
+// 0 = Single depth comparison (1 lookup per cascade; diagnostic reference)
+// 1 = Bilinear 2x2 PCF (4 depth lookups per cascade)
+// 2 = Four overlapping bilinear PCF samples (16 lookups, 9 distinct texels)
+#define SHADOW_FILTER_MODE 1
 
 // World-stable PCF configuration
 #define WORLD_CELL_SIZE 4.0        // World units per cell (meters) for PCF rotation
@@ -59,7 +59,7 @@ in vec4 vLightSpacePosB[MAX_CASCADES];  // Secondary light-space positions (for 
 uniform sampler2D textureSampler;
 uniform sampler2DArray shadowAtlas;         // Unified atlas: layers [offsetA..offsetA+C-1]=A, [offsetB..offsetB+C-1]=B
 uniform sampler2DArray colorTestArray;      // GL_R32F color array (micro-test A)
-uniform sampler2DArrayShadow shadowAtlasShadow; // Same atlas on unit 3, GL_COMPARE_REF_TO_TEXTURE+GL_LEQUAL
+//uniform sampler2DArrayShadow shadowAtlasShadow; // Same atlas on unit 3, GL_COMPARE_REF_TO_TEXTURE+GL_LEQUAL
 
 // Atlas layer offsets (0 or cascadeCount, swap on leapfrog SWAP)
 uniform int atlasOffsetA;
@@ -204,7 +204,7 @@ float computeBias(int cascade, vec3 normal, vec3 lightDir) {
 
     // Cascade scale factor (larger cascades need more bias)
     float cascadeScale = cascadeTexelSizes[cascade] / max(cascadeTexelSizes[0], 0.0001);
-    cascadeScale = min(cascadeScale, 3.0);
+    cascadeScale = min(cascadeScale, 2.0);
 
     // Bias mode support (for A/B testing)
     if (biasMode == 1) {
@@ -347,6 +347,37 @@ float sampleShadowSingleFromArray(int layerOffset, int cascade,
 }
 
 /**
+ * Exact 2x2 bilinear percentage-closer filtering on shadow atlas.
+ * Bilinearly interpolates the shadow comparison result of the 4 surrounding texels.
+ * This guarantees a mathematically continuous shadow gradient across texel boundaries,
+ * eliminating the stepped stair-jumps and edge shimmering caused by sun movement.
+ */
+float sampleBilinearShadow(float layer, vec2 uv, float compareDepth) {
+    float mapSize = 1.0 / shadowMapInvSize;
+    vec2 pos = uv * mapSize - vec2(0.5);
+    vec2 base = floor(pos);
+    vec2 f = pos - base;
+
+    vec2 invSize = vec2(shadowMapInvSize);
+    vec2 uv00 = (base + vec2(0.5, 0.5)) * invSize;
+    vec2 uv10 = (base + vec2(1.5, 0.5)) * invSize;
+    vec2 uv01 = (base + vec2(0.5, 1.5)) * invSize;
+    vec2 uv11 = (base + vec2(1.5, 1.5)) * invSize;
+
+    float d00 = texture(shadowAtlas, vec3(uv00, layer)).r;
+    float d10 = texture(shadowAtlas, vec3(uv10, layer)).r;
+    float d01 = texture(shadowAtlas, vec3(uv01, layer)).r;
+    float d11 = texture(shadowAtlas, vec3(uv11, layer)).r;
+
+    float s00 = (d00 < compareDepth) ? 0.0 : 1.0;
+    float s10 = (d10 < compareDepth) ? 0.0 : 1.0;
+    float s01 = (d01 < compareDepth) ? 0.0 : 1.0;
+    float s11 = (d11 < compareDepth) ? 0.0 : 1.0;
+
+    return mix(mix(s00, s10, f.x), mix(s01, s11, f.x), f.y);
+}
+
+/**
  * Manual depth-compare shadow sampling (NO hardware compare).
  * layerOffset: atlasOffsetA or atlasOffsetB — selects which half of the atlas.
  */
@@ -373,76 +404,87 @@ float sampleShadowPCFFromArray(
         return depth < compareDepth ? 0.0 : 1.0;
 
     #elif SHADOW_FILTER_MODE == 1
-
-        float rnd = fract(sin(dot(floor(worldPos.xz), vec2(127.1, 311.7))) * 43758.5453123);
-        float angle = rnd * 6.2831853;
-        float c = cos(angle);
-        float s = sin(angle);
-        mat2 rot = mat2(c, -s, s, c);
-
-        float cascadeScale = cascadeTexelSizes[cascade] /
-                             max(cascadeTexelSizes[0], 0.0001);
-        float pcfRadius = 1.5 * min(cascadeScale, 3.0);
-
-        vec2 texelSize = vec2(shadowMapInvSize);
-
-        float shadow = 0.0;
-
-        for (int i = 0; i < 8; ++i) {
-            vec2 o = rot * POISSON_8[i];
-            vec2 offset = o * pcfRadius * texelSize;
-
-            vec3 uvw = vec3(projCoords.xy + offset, layer);
-            float depth = texture(shadowAtlas, uvw).r;
-
-            shadow += (depth < compareDepth) ? 0.0 : 1.0;
-        }
-
-        return shadow / 8.0;
+        // Single 2x2 bilinear sample (fastest smooth filter)
+        return sampleBilinearShadow(layer, projCoords.xy, compareDepth);
 
     #else
-
-        ivec2 cell = ivec2(floor(worldPos.xz / WORLD_CELL_SIZE));
-        float cellHash = hashCell(cell);
-        float angle = cellHash * 6.2831853;
-
-        float c = cos(angle);
-        float s = sin(angle);
-        mat2 rot = mat2(c, -s, s, c);
-
-        vec2 texelSize = vec2(shadowMapInvSize);
-
-        float cascadeScale = cascadeTexelSizes[cascade] /
-                             max(cascadeTexelSizes[0], 0.0001);
-        cascadeScale = min(cascadeScale, 2.0);
-
-        float radius = PCF_RADIUS_TEXELS * cascadeScale;
-
-        float shadow = 0.0;
-
-        for (int i = 0; i < PCF_SAMPLE_COUNT; ++i) {
-            vec2 rotatedSample = rot * POISSON_8[i];
-            vec2 offset = rotatedSample * radius * texelSize;
-
-            vec3 uvw = vec3(projCoords.xy + offset, layer);
-            float depth = texture(shadowAtlas, uvw).r;
-
-            shadow += (depth < compareDepth) ? 0.0 : 1.0;
-        }
-
-        return shadow / float(PCF_SAMPLE_COUNT);
+        // 4-tap box bilinear PCF: samples 4 bilinear centers offset by +/- 0.5 texels.
+        // Covers a 3x3 footprint of 9 texels with continuous tent weighting.
+        // Provides soft, anti-aliased penumbra with zero cell-rotation noise and zero shimmer.
+        vec2 texel = vec2(shadowMapInvSize);
+        float s0 = sampleBilinearShadow(layer, projCoords.xy + vec2(-0.5, -0.5) * texel, compareDepth);
+        float s1 = sampleBilinearShadow(layer, projCoords.xy + vec2( 0.5, -0.5) * texel, compareDepth);
+        float s2 = sampleBilinearShadow(layer, projCoords.xy + vec2(-0.5,  0.5) * texel, compareDepth);
+        float s3 = sampleBilinearShadow(layer, projCoords.xy + vec2( 0.5,  0.5) * texel, compareDepth);
+        return (s0 + s1 + s2 + s3) * 0.25;
 
     #endif
 }
 
 /**
+ * Evaluates shadow factor for primary cascade (Atlas A),
+ * applying a smooth crossfade blend band (4m) at the boundary to the next cascade.
+ * This guarantees C1 continuity between CSM cascades and completely removes
+ * cascade seam lines and shadow popping when walking forward.
+ */
+float sampleCascadeBlendedA(int cascade, vec3 normal, vec3 lightDir, vec3 worldPos, float viewDepth) {
+    vec4 lightSpacePos = vLightSpacePos[cascade];
+    vec3 projCoords = lightSpacePos.xyz / lightSpacePos.w;
+    projCoords = projCoords * 0.5 + 0.5;
+    float bias = computeBias(cascade, normal, lightDir);
+    float shadow = sampleShadowPCFFromArray(atlasOffsetA, cascade, worldPos, projCoords, bias);
+
+    if (cascade < cascadeCount - 1) {
+        float splitDist = cascadeSplits[cascade + 1];
+        float distToSplit = splitDist - viewDepth;
+        const float BLEND_BAND = 4.0;
+        if (distToSplit < BLEND_BAND && distToSplit >= 0.0) {
+            float blendFactor = smoothstep(0.0, 1.0, 1.0 - (distToSplit / BLEND_BAND));
+            int nextCascade = cascade + 1;
+            vec4 lspNext = vLightSpacePos[nextCascade];
+            vec3 pcNext = lspNext.xyz / lspNext.w;
+            pcNext = pcNext * 0.5 + 0.5;
+            float biasNext = computeBias(nextCascade, normal, lightDir);
+            float shadowNext = sampleShadowPCFFromArray(atlasOffsetA, nextCascade, worldPos, pcNext, biasNext);
+            shadow = mix(shadow, shadowNext, blendFactor);
+        }
+    }
+    return shadow;
+}
+
+/**
+ * Evaluates shadow factor for secondary cascade (Atlas B for leapfrog),
+ * applying identical smooth crossfade blend band (4m) at the cascade boundary.
+ */
+float sampleCascadeBlendedB(int cascade, vec3 normal, vec3 lightDir, vec3 worldPos, float viewDepth) {
+    vec4 lightSpacePos = vLightSpacePosB[cascade];
+    vec3 projCoords = lightSpacePos.xyz / lightSpacePos.w;
+    projCoords = projCoords * 0.5 + 0.5;
+    float bias = computeBias(cascade, normal, lightDir);
+    float shadow = sampleShadowPCFFromArray(atlasOffsetB, cascade, worldPos, projCoords, bias);
+
+    if (cascade < cascadeCount - 1) {
+        float splitDist = cascadeSplits[cascade + 1];
+        float distToSplit = splitDist - viewDepth;
+        const float BLEND_BAND = 4.0;
+        if (distToSplit < BLEND_BAND && distToSplit >= 0.0) {
+            float blendFactor = smoothstep(0.0, 1.0, 1.0 - (distToSplit / BLEND_BAND));
+            int nextCascade = cascade + 1;
+            vec4 lspNext = vLightSpacePosB[nextCascade];
+            vec3 pcNext = lspNext.xyz / lspNext.w;
+            pcNext = pcNext * 0.5 + 0.5;
+            float biasNext = computeBias(nextCascade, normal, lightDir);
+            float shadowNext = sampleShadowPCFFromArray(atlasOffsetB, nextCascade, worldPos, pcNext, biasNext);
+            shadow = mix(shadow, shadowNext, blendFactor);
+        }
+    }
+    return shadow;
+}
+
+/**
  * Main shadow calculation function.
  * Routes to appropriate implementation based on SHADOW_FILTER_MODE.
- * Supports leapfrog crossfade between two shadow maps.
- *
- * QUALITY: During transition, uses FULL PCF for both A and B to maintain
- * consistent shadow quality. This ensures the transition looks smooth
- * without any quality drop.
+ * Supports leapfrog crossfade between two shadow maps and cascade blending.
  */
 float calculateShadow(vec3 normal, vec3 lightDir, vec3 worldPos, float viewDepth) {
     
@@ -465,8 +507,8 @@ float calculateShadow(vec3 normal, vec3 lightDir, vec3 worldPos, float viewDepth
         return sampleShadowSingleFromArray(atlasOffsetA, cascade, projCoords, bias);
 
     #elif PERF_BISECT_STAGE == 6
-    // PCF A only (PCF_SAMPLE_COUNT fetch)
-        return sampleShadowPCFFromArray(atlasOffsetA, cascade, worldPos, projCoords, bias);
+    // PCF A with smooth cascade blending
+        return sampleCascadeBlendedA(cascade, normal, lightDir, worldPos, viewDepth);
 
     #elif PERF_BISECT_STAGE == 10
     // TEST B1: depth array, CONSTANT coords+layer (1 fetch) — baseline latency
@@ -490,7 +532,6 @@ float calculateShadow(vec3 normal, vec3 lightDir, vec3 worldPos, float viewDepth
 
     #elif PERF_BISECT_STAGE == 14
     // TEST C1: hardware compare SINGLE tap (sampler2DArrayShadow, dynamic coords)
-    // texture(sampler2DArrayShadow, vec4(s, t, layer, refDepth)) → 0.0 or 1.0
         float layer14 = float(atlasOffsetA + cascade);
         return texture(shadowAtlasShadow, vec4(projCoords.xy, layer14, projCoords.z - bias));
 
@@ -514,7 +555,7 @@ float calculateShadow(vec3 normal, vec3 lightDir, vec3 worldPos, float viewDepth
 
     #else
     // Not transitioning → A only (stages 7-9 and fallback)
-    float shadowA = sampleShadowPCFFromArray(atlasOffsetA, cascade, worldPos, projCoords, bias);
+    float shadowA = sampleCascadeBlendedA(cascade, normal, lightDir, worldPos, viewDepth);
     if (leapfrogActive != 1) {
         return shadowA;
     }
@@ -544,14 +585,14 @@ float calculateShadow(vec3 normal, vec3 lightDir, vec3 worldPos, float viewDepth
 
     #elif PERF_BISECT_STAGE == 8
         // Transition: A PCF + B PCF (2*PCF fetch) sans dFdx/dFdy
-        float shadowB = sampleShadowPCFFromArray(atlasOffsetB, cascade, worldPos, projCoordsB, bias);
+        float shadowB = sampleCascadeBlendedB(cascade, normal, lightDir, worldPos, viewDepth);
         if (blendMode == 1) return mix(shadowA, shadowB, shadowCrossfade);
         float n = fract(sin(dot(worldPos.xz * 53.0, vec2(127.1, 311.7))) * 43758.5453123);
         return (n < shadowCrossfade) ? shadowB : shadowA;
 
     #elif PERF_BISECT_STAGE == 9
         // HYBRID DITHER CROSSFADE avec dFdx/dFdy
-        float shadowB = sampleShadowPCFFromArray(atlasOffsetB, cascade, worldPos, projCoordsB, bias);
+        float shadowB = sampleCascadeBlendedB(cascade, normal, lightDir, worldPos, viewDepth);
         float eA = abs(dFdx(shadowA)) + abs(dFdy(shadowA));
         float eB = abs(dFdx(shadowB)) + abs(dFdy(shadowB));
         float edge = max(eA, eB);
@@ -566,7 +607,7 @@ float calculateShadow(vec3 normal, vec3 lightDir, vec3 worldPos, float viewDepth
 
     #else
         // Fallback: linear blend
-        float shadowB = sampleShadowPCFFromArray(atlasOffsetB, cascade, worldPos, projCoordsB, bias);
+        float shadowB = sampleCascadeBlendedB(cascade, normal, lightDir, worldPos, viewDepth);
         return mix(shadowA, shadowB, shadowCrossfade);
     #endif  // inner: STAGE 7/8/9
 
@@ -582,8 +623,6 @@ void main() {
     vec3 L = normalize(sunDir);  // sunDir points TO the sun
 
     int cascade = selectCascade(vViewDepth);
-
-    if (debugShadow > 0) { fragColor = vec4(1,0,0,1); return; }
 
     // ─────────────────────────────────────────────────────────────────────
     // DEBUG MODES (expanded for discontinuity diagnosis)

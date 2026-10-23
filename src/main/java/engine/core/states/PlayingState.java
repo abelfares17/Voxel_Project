@@ -83,7 +83,8 @@ public class PlayingState implements GameState {
         System.out.println("Entering Playing state...");
 
         // Capture cursor for FPS controls
-        glfwSetInputMode(app.getWindow(), GLFW_CURSOR, GLFW_CURSOR_DISABLED);
+        glfwSetInputMode(app.getWindow(), GLFW_CURSOR,
+                GameConfig.TEST_HARNESS_ENABLED ? GLFW_CURSOR_NORMAL : GLFW_CURSOR_DISABLED);
 
         // Initialize text renderer
         textRenderer = new TextRenderer(GameConfig.FONT_PATH, GameConfig.FONT_SIZE);
@@ -141,6 +142,8 @@ public class PlayingState implements GameState {
         game.setAspect((float) app.getWindowWidth() / app.getWindowHeight());
         gpuTimer = GpuPassTimer.createIfEnabled();
         System.out.println("Shadow light-frustum culling: " + RenderConfig.SHADOW_FRUSTUM_CULLING_ENABLED);
+        System.out.println("Tight mesh bounds: shadow=" + RenderConfig.TIGHT_SHADOW_BOUNDS
+                + "; camera=" + RenderConfig.TIGHT_CAMERA_BOUNDS);
 
         // Initialize test harness (if enabled)
         if (GameConfig.TEST_HARNESS_ENABLED) {
@@ -218,7 +221,13 @@ public class PlayingState implements GameState {
                 cachedPerfBisectStage,
                 RenderConfig.SHADOW_FRUSTUM_CULLING_ENABLED,
                 renderContext.getWindowWidth(), renderContext.getWindowHeight(),
-                world.getTimeManager().getTimeOfDay()
+                world.getTimeManager().getTimeOfDay(),
+                RenderConfig.TIGHT_SHADOW_BOUNDS, RenderConfig.TIGHT_CAMERA_BOUNDS,
+                RenderConfig.INDEXED_MESHES + "," + world.getStoredVertices() + "," + world.getMeshBytes()
+                    + "," + glfwGetWindowAttrib(app.getWindow(), GLFW_FOCUSED)
+                    + "," + glfwGetWindowAttrib(app.getWindow(), GLFW_VISIBLE)
+                    + "," + glfwGetWindowAttrib(app.getWindow(), GLFW_ICONIFIED)
+                    + "," + glfwGetInputMode(app.getWindow(), GLFW_CURSOR)
             );
         }
     }

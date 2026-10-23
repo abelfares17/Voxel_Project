@@ -40,6 +40,7 @@ import engine.render.renderer.VoxelRenderer;
 import engine.util.ScreenCapture;
 import engine.world.Chunk;
 import engine.world.World;
+import engine.test.CameraCullingValidator;
 
 public class Game {
     private final long window;
@@ -54,6 +55,7 @@ public class Game {
     private final SunRenderer sunRenderer;
     private final VoxelRenderer voxelRenderer;
     private final ShadowRenderer shadowRenderer;
+    private final CameraCullingValidator cameraCullingValidator = new CameraCullingValidator();
 
     private final TextRenderer textRenderer;
 
@@ -283,13 +285,18 @@ public class Game {
             context.setShadowFinishMs((tShadow1 - tShadow0) / 1e6);
         }
 
-        if (gpuTimer != null) gpuTimer.beginPass(GpuPassTimer.Pass.SKY_SUN);
-        skyRenderer.render(context);
-        sunRenderer.render(context);
-        if (gpuTimer != null) gpuTimer.endPass();
-        if (gpuTimer != null) gpuTimer.beginPass(GpuPassTimer.Pass.VOXEL);
-        voxelRenderer.render(context);
-        if (gpuTimer != null) gpuTimer.endPass();
+        if (cameraCullingValidator.due(context.getDeltaTime())) {
+            if (gpuTimer != null) throw new IllegalStateException("Disable GPU timing during camera validation");
+            cameraCullingValidator.validate(context, skyRenderer, sunRenderer, voxelRenderer);
+        } else {
+            if (gpuTimer != null) gpuTimer.beginPass(GpuPassTimer.Pass.SKY_SUN);
+            skyRenderer.render(context);
+            sunRenderer.render(context);
+            if (gpuTimer != null) gpuTimer.endPass();
+            if (gpuTimer != null) gpuTimer.beginPass(GpuPassTimer.Pass.VOXEL);
+            voxelRenderer.render(context);
+            if (gpuTimer != null) gpuTimer.endPass();
+        }
 
         if (gpuTimer != null) gpuTimer.beginPass(GpuPassTimer.Pass.UI);
         renderUI(context);

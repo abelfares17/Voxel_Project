@@ -652,3 +652,51 @@ Le [guide AABB extrêmement détaillé, pas à pas](Guide_AABB_meshes_pas_a_pas.
 Il couvre le calcul sans altérer le `FloatBuffer`, le transport worker → upload → chunk, la cohérence au remeshing, les deux consommateurs, les tests CPU/GPU, les commandes et les critères d'arrêt. Les variantes caméra et ombres sont isolées pour éviter de mélanger leurs effets. Le principal invariant est l'association des bounds au **VBO courant**, pas à l'état le plus récent des blocs.
 
 **Statut : guide uniquement. Aucun changement du moteur, aucune compilation ni nouveau benchmark dans cette phase. Le gain de cette nouvelle piste reste à mesurer ; les propriétés `voxel.tightShadowBounds` et `voxel.tightCameraBounds` sont des noms proposés, pas des options déjà implémentées.**
+
+## 18. Application et résultats des bounds réelles — 22 octobre 2026
+
+Le statut de la section 17 décrit la phase de rédaction initiale. Le guide a maintenant été **implémenté et testé**. Le [rapport complet](Rapport_AABB_meshes_2026-10-22.md) détaille les changements, commandes, logs, tests et limites.
+
+Les AABB sont calculées depuis les positions du buffer interleavé après `flip`, transportées avec le `MeshData`, puis installées avec le VAO/VBO correspondant. Elles sont effacées au cleanup et remplacées au remeshing. Les deux consommateurs sont indépendants : culling lumineux et culling caméra. Les anciens volumes restent le fallback si les bornes manquent. Aucun shader, biais, filtre, mesh, format de vertex, nombre de cascades, cadence solaire ou paramètre Retina n'a été changé.
+
+### Correction
+
+- Tests CPU : **40 000 cas de frustum** au total, plus tests de buffer, boîtes planes/vides, coordonnées négatives, Y=256 et containment.
+- Test GL : vrai upload worker, remeshing bas → haut → bas, destruction des anciens VAO/VBO, cleanup/ré-upload, chemin direct et mesh vide : **PASS**.
+- Parcours mobile : **12 shadow maps comparées exactement** au chemin sans frustum lumineux, puis **4 images caméra couleur + depth comparées exactement** entre volumes anciens et précis : **zéro différence** sur les frames contrôlées.
+- Les validations sont synchrones et exclues des chiffres de performance. Soleil mobile vérifié, pas de réutilisation des mesures à heure figée.
+
+### Performance : résultat modeste, pas de gain FPS robuste
+
+Sur le M2 Pro, Retina **2268 × 1382**, fenêtre 75 %, trois cascades 2048² et stage 6 :
+
+| Variante | Géométrie soumise, profils séparés | FPS sans instrumentation, comparaison ABBA |
+|---|---|---|
+| Bornes shadow seules | Vertices shadow **−3,72 %** | 45,197 → **45,199** : inchangé |
+| Bornes caméra seules | Vertices voxel **−1,08 %** | 45,097 → **45,425** : +0,73 %, à confirmer |
+| Combinaison | Pas de profil GPU combiné ; les deux tests sont actifs | 45,105 → **44,990** : −0,25 %, non concluant |
+
+Les dix runs ont été séquentiels, caméra et soleil mobiles, sans queries/readbacks/glFinish de diagnostic. Les séries partagent leurs témoins de frontière : A–S–S–A–C–C–A–B–B–A. Les petites différences de FPS ne sont pas une preuve de gain ou régression reproductible ; le P95 reste environ 26–28 ms.
+
+**Décision : les deux nouvelles options restent désactivées par défaut.** Elles existent et peuvent être activées sans recompilation : `-Dvoxel.tightShadowBounds=true`, `-Dvoxel.tightCameraBounds=true`. Le calcul des bornes reste effectué au meshing, même options OFF. Le culling lumineux précédent reste actif.
+
+Le scan CPU ajoute environ **0,037 ms** sur un mesh synthétique chaud de 30 984 vertices, contre 2,187 ms pour la génération complète incluant ce scan. Cette micro-mesure isolée ne vaut pas validation du chargement/streaming sous forte charge.
+
+**Analyse :** les volumes trop larges expliquent une petite partie des soumissions, pas les performances globales autour de 45 FPS sur ce parcours. La correction du culling est étayée ; son activation comme optimisation par défaut ne l'est pas encore. Les nombreux vertices restants justifient une investigation séparée du meshing/indexage, sans promesse de FPS proportionnels au gain de stockage. Les artefacts de cascades restent un problème distinct : cette intervention ne les corrige pas.
+
+## 19. Indexation des quads et harnais discret — 23 octobre 2026
+
+L'indexation est implémentée et **activée par défaut**. Le [rapport détaillé](Rapport_indexation_2026-10-23.md) rassemble les changements, tests, limites et logs reproductibles.
+
+- Quatre vertices complets et six indices uint32 par quad au lieu de six vertices dupliqués ; mêmes triangles, attributs et winding. Les passes monde et ombres utilisent toutes deux le mesh indexé.
+- EBO possédé par le chunk, remplacé et détruit avec son mesh ; buffers natifs possédés par `MeshData`.
+- Harnais sans demande de focus ni capture du curseur. Fenêtre réelle visible, non minimisée, résolution inchangée. Les états de fenêtre sont journalisés pour détecter un test non comparable.
+- Métriques distinctes : références soumises, vertices stockés, octets VBO/EBO, flag d'indexation et état de fenêtre.
+
+**ABBA mobile non instrumenté : 43,78 → 58,66 FPS (+34,0 %), 22,84 → 17,05 ms/frame.** Les deux runs indexés sont à 60,23 et 57,09 FPS ; P95 21 et 24 ms. Ce n'est pas une garantie de 60 FPS constants. Les données de meshes installés passent d'environ 676 à 526 Mo ; cela ne représente pas toute la VRAM.
+
+Profils GPU séparés : shadow 8,97 → 7,40 ms, voxel 13,05 → 8,81 ms, avec environ 31,95 et 6,45 millions de références soumises. Le gain ne vient pas d'une suppression de triangles. Les résultats sont propres à ce parcours et à ces conditions de bureau ; ne pas les comparer directement aux anciens essais focalisés.
+
+Tests : expansion exacte des neuf attributs via les indices, cas vide/terrain/AO/frontières et plus de 65 536 vertices ; rasterisation couleur/depth de snapshots sous quatre projections ; remplacement et destruction des EBO ; worker et remeshing. Les shaders de production n'ont pas été modifiés. Le rapport précise ce qui est couvert par ces tests et ce qui reste à contrôler.
+
+Retour arrière sans recompilation : `-Dvoxel.indexedMeshes=false`. Les deux options de bounds précises restent OFF. Le shimmering et les biais d'ombres restent un chantier séparé.

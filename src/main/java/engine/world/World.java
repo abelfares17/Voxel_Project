@@ -2,6 +2,8 @@ package engine.world;
 
 import java.util.*;
 
+import engine.core.config.RenderConfig;
+import engine.render.MeshBounds;
 import engine.render.MeshWorkerManager;
 import engine.render.Shader;
 import engine.time.TimeManager;
@@ -186,6 +188,18 @@ public class World {
 
     public int getChunkCount() {
         return chunks.size();
+    }
+
+    public long getMeshBytes() {
+        long total = 0;
+        for (Chunk chunk : chunks.values()) total += chunk.getMeshBytes();
+        return total;
+    }
+
+    public long getStoredVertices() {
+        long total = 0;
+        for (Chunk chunk : chunks.values()) total += chunk.getVertexCount();
+        return total;
     }
 
     public Block getBlockAt(int x, int y, int z) {
@@ -385,17 +399,21 @@ public class World {
                 }
             }
 
-            if (lightFrustum != null && !intersectsShadowFrustum(lightFrustum, worldX, worldZ)) {
-                continue;
+            if (lightFrustum != null) {
+                MeshBounds bounds = chunk.getMeshBounds();
+                boolean visible = RenderConfig.TIGHT_SHADOW_BOUNDS && bounds != null
+                        ? bounds.intersects(lightFrustum, worldX, worldZ)
+                        : intersectsShadowFrustum(lightFrustum, worldX, worldZ);
+                if (!visible) continue;
             }
 
             depthModelMatrix.translation(worldX, 0, worldZ);
             depthShader.setMat4("modelMatrix", depthModelMatrix);
 
             glBindVertexArray(vao);
-            glDrawArrays(GL_TRIANGLES, 0, vertexCount);
+            engine.render.MeshBuilder.drawBoundChunk(chunk);
             depthDrawCalls++;
-            depthVertices += vertexCount;
+            depthVertices += chunk.getDrawCount();
         }
 
         glBindVertexArray(0);
