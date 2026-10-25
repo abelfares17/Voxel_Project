@@ -700,3 +700,27 @@ Profils GPU séparés : shadow 8,97 → 7,40 ms, voxel 13,05 → 8,81 ms, avec e
 Tests : expansion exacte des neuf attributs via les indices, cas vide/terrain/AO/frontières et plus de 65 536 vertices ; rasterisation couleur/depth de snapshots sous quatre projections ; remplacement et destruction des EBO ; worker et remeshing. Les shaders de production n'ont pas été modifiés. Le rapport précise ce qui est couvert par ces tests et ce qui reste à contrôler.
 
 Retour arrière sans recompilation : `-Dvoxel.indexedMeshes=false`. Les deux options de bounds précises restent OFF. Le shimmering et les biais d'ombres restent un chantier séparé.
+
+## 20. Cache des locations d'uniforms — 23 octobre 2026
+
+Expérience implémentée et mesurée : mémoriser les locations dans chaque `Shader`, y compris les uniforms inactifs, sans toucher aux uploads ou aux shaders. Validation mobile de chaque hit contre une recherche GL directe : aucune divergence. Voir le [rapport et les CSV](Rapport_uniform_cache_2026-10-23.md).
+
+Les recherches passent d'environ **2,6 millions par run à 59 résolutions initiales**, mais la série ABBA non instrumentée donne **61,284 → 61,244 FPS** : aucun gain de débit démontré. Les 61 FPS des témoins étaient déjà présents dans cette session ; ils ne sont pas un gain par rapport aux mesures antérieures attribuable à ce changement.
+
+Le cache reste **OFF par défaut**, activable par `-Dvoxel.cacheUniforms=true`. L'indexation reste ON. Cette piste CPU n'explique pas le temps restant de la frame ; l'expérience suivante devra cibler le travail GPU, sans en déduire prématurément un mécanisme matériel précis.
+
+## 21. Éviter les ombres sans contribution directe — 24 octobre 2026
+
+Piste GLSL implémentée derrière `-Dvoxel.skipUnlitShadows=true` : dans le chemin d'éclairage normal, ne pas appeler `calculateShadow` si `max(dot(N,L),0)` vaut zéro. Le facteur d'ombre n'intervient alors plus dans la couleur directe. Aucun changement de génération des shadow maps, de filtre, de biais, d'AO, de fog ou des modes debug.
+
+Build et run GL réussis ; **quatre comparaisons exactes couleur RGBA8 + profondeur**, mêmes frames et mêmes ressources, sans différence. Caméra et soleil mobiles. Validation isolée des benchmarks. Voir le [rapport détaillé, commandes et logs](Rapport_ombres_sans_contribution_2026-10-24.md).
+
+ABBA non instrumenté avec indexation et vertices compacts actifs : **64,652 → 64,862 FPS (+0,32 %)**, soit 15,467 → 15,417 ms/frame. L'écart est inférieur à la variation entre témoins : **aucun gain robuste démontré**. Profilage séparé : passe voxel 8,836 → 8,866 ms, shadow 6,289 → 6,339 ms, sans baisse mesurée.
+
+**Option OFF par défaut.** L'expérience est disponible sans recompilation, mais ne justifie pas une activation générale. Ces mesures ne prouvent ni un gain à d'autres angles solaires, ni une limitation micro-architecturale particulière. La prochaine vérification de cette piste serait un test à d'autres heures/vues ; ne pas ajouter simultanément une modification du PCF qui empêcherait d'attribuer le résultat.
+
+## 22. Fusion du mesh d’ombres : activée par défaut
+
+Qualification finale : **65,37 → 79,34 FPS (+21,36 %)** sur le parcours ABBA ; temps GPU shadow **6,41 → 3,43 ms** dans les profils séparés. Environ **74 Mo supplémentaires** pour les meshes installés. Contrôle OFF/OFF exact, différences finales OFF/ON rares et contrôle manuel sans régression observée. Tests de remeshing et lifetime ON/OFF réussis après correction d’un faux positif lié à la réutilisation des noms GL.
+
+Le réglage effectif est centralisé dans `RenderConfig.GREEDY_SHADOWS`. Fallback : `-Dvoxel.greedyShadows=false`. Aucun changement des biais, cascades ou cadence solaire. Voir [résultats, limites et décision finale](Qualification_fusion_ombres_2026-10-24.md).

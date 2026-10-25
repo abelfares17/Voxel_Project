@@ -1,73 +1,142 @@
 package engine.render.renderer;
 
+import java.util.Random;
+import org.joml.Matrix4f;
 import org.joml.Vector3f;
-import static org.lwjgl.opengl.GL11.GL_BACK;
-import static org.lwjgl.opengl.GL11.GL_BLEND;
-import static org.lwjgl.opengl.GL11.GL_COLOR_BUFFER_BIT;
-import static org.lwjgl.opengl.GL11.GL_DEPTH_BUFFER_BIT;
-import static org.lwjgl.opengl.GL11.GL_DEPTH_TEST;
-import static org.lwjgl.opengl.GL11.GL_LESS;
-import static org.lwjgl.opengl.GL11.GL_SCISSOR_TEST;
-import static org.lwjgl.opengl.GL11.glClear;
-import static org.lwjgl.opengl.GL11.glClearColor;
-import static org.lwjgl.opengl.GL11.glColorMask;
-import static org.lwjgl.opengl.GL11.glDepthFunc;
-import static org.lwjgl.opengl.GL11.glDepthMask;
-import static org.lwjgl.opengl.GL11.glDisable;
-import static org.lwjgl.opengl.GL11.glDrawBuffer;
-import static org.lwjgl.opengl.GL11.glEnable;
-import static org.lwjgl.opengl.GL11.glReadBuffer;
-import static org.lwjgl.opengl.GL11.glViewport;
-import static org.lwjgl.opengl.GL30.GL_FRAMEBUFFER;
-import static org.lwjgl.opengl.GL30.glBindFramebuffer;
-
+import static org.lwjgl.opengl.GL32.*;
+import engine.render.Shader;
+import engine.render.camera.PerspectiveCamera;
 import engine.render.core.RenderContext;
+import engine.time.CelestialState;
 
-/**
- * Renderer responsible for clearing the screen with sky color.
- * Uses the frame-cached sky color from RenderContext for consistency.
+/** Owns sky/disc/star programs and geometry. Colors are linear; framebuffer sRGB is external.
+ * Entry: any previous pass. Exit: screen FBO, viewport restored, depth LESS/write enabled,
+ * blending/scissor/program-point-size disabled, back-face CCW culling, program/VAO unbound.
  */
-public class SkyRenderer implements Renderer {
+public final class SkyRenderer implements Renderer {
+    public static final int STAR_COUNT = 512;
+    private final String mode;
+    private final Shader sky, stars;
+    private int skyVao, starVao, starVbo;
+    private Long catalogueSeed;
+    private boolean closed;
 
     public SkyRenderer() {
-        // No initialization needed
+        mode = System.getProperty("voxel.skyMode", "procedural");
+        if (!mode.equals("flat") && !mode.equals("procedural"))
+            throw new IllegalArgumentException("voxel.skyMode must be flat or procedural");
+        sky = new Shader("shaders/sky_vertex.glsl", "shaders/sky_fragment.glsl");
+        stars = new Shader("shaders/stars_vertex.glsl", "shaders/stars_fragment.glsl");
+        skyVao = glGenVertexArrays(); // fullscreen vertices from gl_VertexID (GLSL 150)
+        starVao = glGenVertexArrays();
+        starVbo = glGenBuffers();
+        glBindVertexArray(starVao);
+        glBindBuffer(GL_ARRAY_BUFFER, starVbo);
+        glVertexAttribPointer(0, 3, GL_FLOAT, false, 16, 0);
+        glEnableVertexAttribArray(0);
+        glVertexAttribPointer(3, 1, GL_FLOAT, false, 16, 12);
+        glEnableVertexAttribArray(3);
+        glBindVertexArray(0);
+        glBindBuffer(GL_ARRAY_BUFFER, 0);
     }
 
-    @Override
-    public void render(RenderContext context) {
-        // Use the frame-cached sky color for consistency across all renderers
-        Vector3f skyColor = context.getSkyColor();
+    /** Stable world-seeded directions uniformly distributed over the sphere. */
+    public static float[] starCatalogue(long seed) {
+        Random random = new Random(seed ^ 0x53544152534B594CL);
+        float[] data = new float[STAR_COUNT * 4];
+        for (int i = 0; i < STAR_COUNT; i++) {
+            double y = random.nextDouble() * 2 - 1, a = random.nextDouble() * 2 * Math.PI;
+            double r = Math.sqrt(1 - y * y);
+            data[i*4] = (float)(r * Math.cos(a));
+            data[i*4+1] = (float)y;
+            data[i*4+2] = (float)(r * Math.sin(a));
+            data[i*4+3] = .35f + .65f * random.nextFloat();
+        }
+        return data;
+    }
 
-        // Clamp to [0,1] to avoid artifacts
-        float r = clamp01(skyColor.x);
-        float g = clamp01(skyColor.y);
-        float b = clamp01(skyColor.z);
-
-        // Ensure we're rendering to default framebuffer with correct state
+    @Override public void render(RenderContext context) {
+        if (closed) throw new IllegalStateException("Sky renderer already closed");
+        var state = context.getCelestialState();
+        Vector3f horizon = state.horizon();
         glBindFramebuffer(GL_FRAMEBUFFER, 0);
-        glColorMask(true, true, true, true);
-        glDepthMask(true);
-        glDisable(GL_BLEND);
-        glDisable(GL_SCISSOR_TEST);
-        glEnable(GL_DEPTH_TEST);
-        glDepthFunc(GL_LESS);
         glDrawBuffer(GL_BACK);
         glReadBuffer(GL_BACK);
         glViewport(0, 0, context.getWindowWidth(), context.getWindowHeight());
-
-        // Clear screen with sky color
-        glClearColor(r, g, b, 1.0f);
+        glColorMask(true, true, true, true);
+        glDisable(GL_SCISSOR_TEST);
+        glDisable(GL_BLEND);
+        glDisable(GL_STENCIL_TEST);
+        glDepthMask(true);
+        glClearDepth(1);
+        glClearColor(horizon.x, horizon.y, horizon.z, 1);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+        context.recordSkyClear(horizon.x, horizon.y, horizon.z, 1, true, true);
+        glDisable(GL_DEPTH_TEST);
+        glDepthMask(false);
+        glDisable(GL_CULL_FACE);
+        try {
+            if (mode.equals("flat")) return;
+            Matrix4f view = context.getCamera() instanceof PerspectiveCamera pc ? pc.getViewMatrix()
+                    : context.getCamera().getViewMatrix(context.getCamera().getPosition(), 0, 0);
+            Matrix4f rotationView = new Matrix4f(view).m30(0).m31(0).m32(0);
+            sky.bind();
+            sky.setUniform("inverseProjection", new Matrix4f(context.getCamera().getProjectionMatrix()).invert());
+            sky.setUniform("inverseViewRotation", new Matrix4f(rotationView).invert());
+            sky.setUniform("horizonColor", horizon);
+            sky.setUniform("zenithColor", state.zenith());
+            sky.setUniform("sunElevation", state.sunElevation());
+            sky.setUniform("daylight", state.daylight());
+            setBodies(sky, state);
+            glBindVertexArray(skyVao);
+            glDrawArrays(GL_TRIANGLES, 0, 3);
+
+            if (state.stars() > 0) {
+                long seed = context.getWorld().getSeed();
+                if (catalogueSeed == null || catalogueSeed != seed) {
+                    glBindBuffer(GL_ARRAY_BUFFER, starVbo);
+                    glBufferData(GL_ARRAY_BUFFER, starCatalogue(seed), GL_STATIC_DRAW);
+                    glBindBuffer(GL_ARRAY_BUFFER, 0);
+                    catalogueSeed = seed;
+                }
+                stars.bind();
+                stars.setUniform("rotationProjection", new Matrix4f(context.getCamera().getProjectionMatrix()).mul(rotationView));
+                stars.setUniform("visibility", state.stars());
+                setBodies(stars, state);
+                glEnable(GL_PROGRAM_POINT_SIZE);
+                glEnable(GL_BLEND);
+                glBlendEquation(GL_FUNC_ADD);
+                glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+                glBindVertexArray(starVao);
+                glDrawArrays(GL_POINTS, 0, STAR_COUNT);
+            }
+        } finally {
+            glBindVertexArray(0);
+            glUseProgram(0);
+            glDisable(GL_PROGRAM_POINT_SIZE);
+            glDisable(GL_BLEND);
+            glEnable(GL_DEPTH_TEST);
+            glDepthMask(true);
+            glDepthFunc(GL_LESS);
+            glFrontFace(GL_CCW);
+            glCullFace(GL_BACK);
+            glEnable(GL_CULL_FACE);
+        }
     }
 
-    private static float clamp01(float v) {
-        if (v < 0f) return 0f;
-        if (v > 1f) return 1f;
-        return v;
+    private static void setBodies(Shader shader, CelestialState state) {
+        shader.setUniform("sunDirection", state.sunDirection());
+        shader.setUniform("moonDirection", state.moonDirection());
+        shader.setUniform("sunCosRadius", (float)Math.cos(Math.toRadians(CelestialState.SUN_DIAMETER_DEGREES / 2)));
+        shader.setUniform("moonCosRadius", (float)Math.cos(Math.toRadians(CelestialState.MOON_DIAMETER_DEGREES / 2)));
+        shader.setUniform("moonSinRadius", (float)Math.sin(Math.toRadians(CelestialState.MOON_DIAMETER_DEGREES / 2)));
     }
 
-    @Override
-    public void cleanup() {
-        // No resources to clean up
+    @Override public void cleanup() {
+        if (closed) return;
+        closed = true;
+        sky.cleanup(); stars.cleanup();
+        glDeleteBuffers(starVbo); glDeleteVertexArrays(starVao); glDeleteVertexArrays(skyVao);
+        starVbo = starVao = skyVao = 0;
     }
 }

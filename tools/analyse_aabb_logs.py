@@ -6,6 +6,7 @@ Usage: python3 tools/analyse_aabb_logs.py logs/perf_test_...csv [logs/...csv ...
 """
 import csv
 import json
+import math
 import statistics
 import sys
 
@@ -37,7 +38,7 @@ def summarize(path):
             ["tightShadowBounds", "tightCameraBounds", "fbWidth", "fbHeight", "perfBisectStage"])
     for key in keys:
         result[key] = sorted({row.get(key, "not logged") for row in selected})
-    for key in ("indexedMeshes", "indexed_meshes", "focused", "visible", "iconified", "cursorMode"):
+    for key in ("indexedMeshes", "indexed_meshes", "cacheUniforms", "compactVertices", "skipUnlitShadows", "skip_unlit_shadows", "greedyShadows", "greedy_shadows", "focused", "visible", "iconified", "cursorMode"):
         if key in selected[0]:
             result[key] = sorted({row[key] for row in selected})
     for key in ("storedVertices", "meshBytes"):
@@ -47,8 +48,10 @@ def summarize(path):
     result["sun_time_range"] = [min(values(time_key)), max(values(time_key))]
     if gpu:
         for key in ("shadow_draws", "shadow_vertices", "voxel_draws", "voxel_vertices",
-                    "gpu_shadow_ms", "gpu_sky_sun_ms", "gpu_voxel_ms", "gpu_ui_ms"):
-            result[key + "_mean"] = statistics.mean(values(key))
+                    "gpu_shadow_ms", "gpu_sky_sun_ms", "gpu_voxel_ms", "gpu_ui_ms", "gpu_scene_ms"):
+            if key not in selected[0]: continue
+            finite = [v for v in values(key) if math.isfinite(v)]
+            result[key + "_mean"] = statistics.mean(finite) if finite else None
     else:
         duration = sum(values("dt"))
         dt_ms = [value * 1000 for value in values("dt")]

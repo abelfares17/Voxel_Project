@@ -65,8 +65,8 @@ uniform sampler2DArray colorTestArray;      // GL_R32F color array (micro-test A
 uniform int atlasOffsetA;
 uniform int atlasOffsetB;
 
-uniform vec3 sunDir;
-uniform vec3 sunColor;
+uniform vec3 lightDirection;
+uniform vec3 lightColor;
 uniform float ambient;
 
 uniform vec3 fogColor;
@@ -108,6 +108,7 @@ uniform int blendMode;                             // 0 = dither (stochastic), 1
 // 6 = shadow A vs B difference (during leapfrog - shows blend discontinuity)
 // 7 = lit color BEFORE fog (isolate fog amplification of flash)
 uniform int debugShadow;
+uniform int skipUnlitShadows; // Normal lighting only; debug shadow views remain unchanged.
 
 // Master shadow switch: 0 = no shadow fetches (shadow = 1.0), 1 = normal
 uniform int shadowsEnabled;
@@ -116,6 +117,7 @@ uniform int shadowsEnabled;
 uniform int pcfMode;
 uniform int forceCascade;
 uniform int biasMode;
+uniform float shadowDepthBiasScales[MAX_CASCADES];
 
 // Temporal jitter for shadow anti-aliasing
 uniform int frameIndex;  // Increments each frame (0-7 cycle)
@@ -180,6 +182,7 @@ float hashCell(ivec2 cell) {
  * Returns cascade index (0 to cascadeCount-1).
  */
 int selectCascade(float viewDepth) {
+    if (cascadeCount <= 0) return 0;
     // Support forced cascade mode for testing (if forceCascade >= 0)
     if (forceCascade >= 0 && forceCascade < cascadeCount) {
         return forceCascade;
@@ -198,7 +201,7 @@ int selectCascade(float viewDepth) {
  * Scales with cascade texel size and surface angle to light.
  * Uses tan(angle) formula for proper handling of grazing angles.
  */
-float computeBias(int cascade, vec3 normal, vec3 lightDir) {
+float computeBiasUnscaled(int cascade, vec3 normal, vec3 lightDir) {
     float NdotL = dot(normal, lightDir);
     float cosTheta = max(NdotL, 0.001);  // Clamp to avoid division by zero
 
@@ -229,6 +232,10 @@ float computeBias(int cascade, vec3 normal, vec3 lightDir) {
     float baseBias = 0.0005;
     float slopeBias = 0.0003;  // Lower coefficient since tan grows faster
     return (baseBias + slopeBias * tanTheta) * cascadeScale;
+}
+
+float computeBias(int cascade, vec3 normal, vec3 lightDir) {
+    return computeBiasUnscaled(cascade, normal, lightDir) * shadowDepthBiasScales[cascade];
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -487,6 +494,7 @@ float sampleCascadeBlendedB(int cascade, vec3 normal, vec3 lightDir, vec3 worldP
  * Supports leapfrog crossfade between two shadow maps and cascade blending.
  */
 float calculateShadow(vec3 normal, vec3 lightDir, vec3 worldPos, float viewDepth) {
+    if (shadowsEnabled == 0 || cascadeCount <= 0) return 1.0;
     
     #if PERF_BISECT_STAGE <= 4
         return 1.0;
@@ -620,7 +628,7 @@ float calculateShadow(vec3 normal, vec3 lightDir, vec3 worldPos, float viewDepth
 
 void main() {
     vec3 N = normalize(vNormal);
-    vec3 L = normalize(sunDir);  // sunDir points TO the sun
+    vec3 L = normalize(lightDirection);  // points TO the active sun/moon
 
     int cascade = selectCascade(vViewDepth);
 
@@ -669,6 +677,7 @@ void main() {
             fragColor = vec4(CASCADE_COLORS[cascade], 1.0);
             return;
         } else if (debugShadow == 6) {
+            if (shadowsEnabled == 0) { fragColor = vec4(0, 1, 1, 1); return; }
             // Mode 6: Shadow A vs B difference (leapfrog blend discontinuity)
             // Shows |shadowA - shadowB| as red intensity
             // If flash happens, this will show bright red where discontinuity occurs
@@ -712,7 +721,7 @@ void main() {
             vec3 hemisphereAmbient = mix(groundCol, skyCol, hemisphereBlend);
 
             vec3 indirect = hemisphereAmbient * ambient * aoFactor;
-            vec3 direct = sunColor * diff_lighting * shadow;
+            vec3 direct = lightColor * diff_lighting * shadow;
             vec3 colorNoFog = albedo * (indirect + direct);
 
             // Output lit color WITHOUT fog
@@ -793,7 +802,7 @@ void main() {
 
     #elif PERF_BISECT_STAGE == 2
         // Lighting minimal (pas AO, pas fog, pas shadow)
-        vec3 color = albedo * (ambient + sunColor * diff);
+        vec3 color = albedo * (ambient + lightColor * diff);
         fragColor = vec4(color, 1.0);
         return;
 
@@ -804,13 +813,13 @@ void main() {
         float aoRemapped = pow(vAO, aoPowerVal);
         float aoFactor = mix(aoMinVal, 1.0, aoRemapped);
 
-        vec3 color = albedo * (ambient * aoFactor + sunColor * diff);
+        vec3 color = albedo * (ambient * aoFactor + lightColor * diff);
         fragColor = vec4(color, 1.0);
         return;
 
     #elif PERF_BISECT_STAGE == 4
         // + fog only (no AO, no shadow)
-        vec3 color = albedo * (ambient + sunColor * diff);
+        vec3 color = albedo * (ambient + lightColor * diff);
         float dist = length(cameraPos - vWorldPos);
         float fogFactor = clamp((fogEnd - dist) / (fogEnd - fogStart), 0.0, 1.0);
         fragColor = mix(vec4(fogColor, 1.0), vec4(color, 1.0), fogFactor);
@@ -818,7 +827,10 @@ void main() {
 
     #else
         // Shadow path (stages 5..9 go through calculateShadow)
-        float shadow = (shadowsEnabled == 1) ? calculateShadow(N, L, vWorldPos, vViewDepth) : 1.0;
+        float shadow = 1.0;
+        if (shadowsEnabled == 1 && (skipUnlitShadows == 0 || diff > 0.0)) {
+            shadow = calculateShadow(N, L, vWorldPos, vViewDepth);
+        }
 
         // AO
         float aoMinVal = aoMin > 0.0 ? aoMin : 0.5;
@@ -833,7 +845,7 @@ void main() {
         vec3 hemisphereAmbient = mix(groundColor, skyColor, hemisphereBlend);
 
         vec3 indirect = hemisphereAmbient * ambient * aoFactor;
-        vec3 direct = sunColor * diff * shadow;
+        vec3 direct = lightColor * diff * shadow;
         vec3 color = albedo * (indirect + direct);
 
         // Fog

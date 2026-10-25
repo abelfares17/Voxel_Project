@@ -23,6 +23,7 @@ public class Chunk {
     private volatile int vbo;
     private volatile int vertexCount;
     private int ebo, indexCount;
+    private int vertexStride = 36;
     private volatile MeshBounds meshBounds;
 
     // true si le mesh doit être reconstruit avant d'être rendu
@@ -142,6 +143,12 @@ public class Chunk {
     }
 
     public void setMesh(int newVao, int newVbo, int vertexCount, MeshBounds bounds, int newEbo, int indexCount) {
+        setMesh(newVao, newVbo, vertexCount, bounds, newEbo, indexCount, 36);
+    }
+
+    public void setMesh(int newVao, int newVbo, int vertexCount, MeshBounds bounds, int newEbo, int indexCount, int stride) {
+        setShadowMesh(null);
+        this.vertexStride = stride;
         if (ebo != 0 && ebo != newEbo) org.lwjgl.opengl.GL15.glDeleteBuffers(ebo);
         this.ebo = newEbo;
         this.indexCount = indexCount;
@@ -175,13 +182,22 @@ public class Chunk {
     public int getEbo() { return ebo; }
     public int getIndexCount() { return indexCount; }
     public int getDrawCount() { return ebo == 0 ? vertexCount : indexCount; }
-    public long getMeshBytes() { return (long) vertexCount * 36 + (long) indexCount * Integer.BYTES; }
+    public long getMeshBytes() { return (long) vertexCount * vertexStride + (long) indexCount * Integer.BYTES
+            + (shadowMesh == null ? 0 : (long) shadowMesh.count * 12); }
+
+    private engine.render.ShadowMesh shadowMesh;
+    public engine.render.ShadowMesh getShadowMesh() { return shadowMesh; }
+    public void setShadowMesh(engine.render.ShadowMesh mesh) {
+        if (shadowMesh != null && shadowMesh != mesh) shadowMesh.cleanup();
+        shadowMesh = mesh;
+    }
 
     public MeshBounds getMeshBounds() {
         return meshBounds;
     }
 
     public void cleanup() {
+        setShadowMesh(null);
         if (ebo != 0) org.lwjgl.opengl.GL15.glDeleteBuffers(ebo);
         ebo = 0;
         indexCount = 0;

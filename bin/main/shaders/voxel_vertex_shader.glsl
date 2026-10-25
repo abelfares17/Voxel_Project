@@ -17,7 +17,7 @@ uniform int cascadeCount;
 uniform int leapfrogActive;  // 1 if transitioning between shadow maps
 
 // Normal-offset shadow parameters
-uniform vec3 sunDir;  // Direction TO the sun (for normal offset calculation)
+uniform vec3 lightDirection;  // Direction TO the active sun/moon (normal offset)
 uniform float cascadeTexelSizes[MAX_CASCADES];  // For scaling normal offset per cascade
 uniform float cascadeTexelSizesB[MAX_CASCADES]; // Secondary texel sizes (for leapfrog)
 uniform int normalOffsetMode;  // 0=off, 1=on (for A/B testing)
@@ -60,7 +60,7 @@ void main() {
                 // The offset scales with:
                 // 1. Cascade texel size (larger offset for coarser cascades)
                 // 2. Angle between normal and light (more offset at grazing angles)
-                float NdotL = clamp(dot(worldNormal, sunDir), 0.0, 1.0);
+                float NdotL = clamp(dot(worldNormal, lightDirection), 0.0, 1.0);
                 float sinTheta = sqrt(max(1.0 - NdotL * NdotL, 0.0));  // sin of angle to light
 
                 // Offset magnitude: larger at grazing angles, scaled by texel size

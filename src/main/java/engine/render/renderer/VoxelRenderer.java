@@ -16,7 +16,6 @@ import engine.render.camera.Camera;
 import engine.render.camera.PerspectiveCamera;
 import engine.render.core.RenderContext;
 import engine.render.shadow.CascadeData;
-import engine.time.SunData;
 import engine.world.Chunk;
 
 /**
@@ -94,13 +93,14 @@ public class VoxelRenderer implements Renderer {
 
     /** Diagnostic replay can keep the same meshes and temporal sample as the preceding draw. */
     public void render(RenderContext context, boolean tightBounds, boolean advanceFrame) {
+        render(context, tightBounds, advanceFrame, RenderConfig.SKIP_UNLIT_SHADOWS);
+    }
+
+    /** Same-frame shader comparison override; no global state toggle. */
+    public void render(RenderContext context, boolean tightBounds, boolean advanceFrame, boolean skipUnlit) {
         checkGLErrors("VoxelRender.render() entry point");
 
-        SunData sunData = context.getWorld().getTimeManager().getSunData();
-        Vector3f sunDir = context.getSunDirLighting();
-        float sunY = sunData.sunY();
-
-        Vector3f sunColor = RenderConfig.getSunColor(sunY);
+        var celestial = context.getCelestialState();
 
         Vector3f cameraPos = context.getCamera().getPosition();
         Matrix4f proj = context.getCamera().getProjectionMatrix();
@@ -128,9 +128,9 @@ public class VoxelRenderer implements Renderer {
         Vector3f skyColor = context.getSkyColor();
 
         voxelShader.bind();
-        voxelShader.setUniform("sunDir", sunDir);
-        voxelShader.setUniform("sunColor", sunColor);
-        voxelShader.setUniform("ambient", context.getWorld().getTimeManager().getAmbient());
+        voxelShader.setUniform("lightDirection", celestial.lightDirection());
+        voxelShader.setUniform("lightColor", celestial.lightColor());
+        voxelShader.setUniform("ambient", celestial.ambient());
         voxelShader.setUniform("projectionMatrix", proj);
         voxelShader.setUniform("viewMatrix", view);
         voxelShader.setUniform("cameraPos", cameraPos);
@@ -143,17 +143,19 @@ public class VoxelRenderer implements Renderer {
         // AO uniforms
         voxelShader.setUniform("aoMin", aoMin);
         voxelShader.setUniform("aoPower", aoPower);
-        voxelShader.setUniform("debugAO", 0 /*debugAO ? 1 : 0*/);
+        voxelShader.setUniform("debugAO", debugAO ? 1 : 0);
 
         // Hemisphere ambient lighting
         voxelShader.setUniform("skyAmbientColor", skyAmbientColor);
         voxelShader.setUniform("groundAmbientColor", groundAmbientColor);
 
         // Debug modes
-        voxelShader.setUniform("debugShadow", 0/*debugShadow*/);
-        voxelShader.setUniform("forceCascade", -1 /*forceCascade*/);
+        voxelShader.setUniform("debugShadow", debugShadow);
+        voxelShader.setUniform("forceCascade", forceCascade);
+        voxelShader.setUniformFloatArray("shadowDepthBiasScales", shadowRenderer.getDepthBiasScales());
         voxelShader.setUniform("biasMode", biasMode);
         voxelShader.setUniform("normalOffsetMode", normalOffsetMode);
+        voxelShader.setUniform("skipUnlitShadows", skipUnlit ? 1 : 0);
 
         // Temporal jitter
         voxelShader.setUniform("frameIndex", advanceFrame ? frameIndex : (frameIndex + 7) % 8);
@@ -161,6 +163,7 @@ public class VoxelRenderer implements Renderer {
         // CSM uniforms
         CascadeData cascadeData = shadowRenderer.getCascadeData();
 
+        voxelShader.setUniform("cascadeCount", cascadeData == null ? 0 : cascadeData.cascadeCount());
         if (cascadeData != null) {
             voxelShader.setUniformMat4Array("lightSpaceMatrices", cascadeData.lightSpaceMatrices());
             voxelShader.setUniformFloatArray("cascadeSplits", cascadeData.splitDistances());
@@ -196,12 +199,13 @@ public class VoxelRenderer implements Renderer {
         voxelShader.setUniform("textureSampler", 0);
 
         // Master shadow switch (shader uses this to skip fetches without changing bindings)
-        voxelShader.setUniform("shadowsEnabled", RenderConfig.SHADOWS_ENABLED ? 1 : 0);
+        voxelShader.setUniform("shadowsEnabled", RenderConfig.SHADOWS_ENABLED
+                && shadowRenderer.hasCurrentShadowMap(context) ? 1 : 0);
 
-        // Unified shadow atlas (A+B in one sampler2DArray — unit 1)
+        // One direct sun/moon atlas (three cascades, sampler2DArray on unit 1).
         voxelShader.setTextureArray("shadowAtlas", shadowRenderer.getShadowAtlas(), 1);
 
-        // Atlas offsets: tell shader which half of the atlas is A and which is B
+        // Legacy interface: A and B both reference the same three direct cascades.
         voxelShader.setUniform("atlasOffsetA", shadowRenderer.getAtlasOffsetA());
         voxelShader.setUniform("atlasOffsetB", shadowRenderer.getAtlasOffsetB());
 
@@ -211,7 +215,7 @@ public class VoxelRenderer implements Renderer {
         }
 
         // Upload pending meshes
-        if (advanceFrame) context.getWorld().getMeshManager().uploadMeshesIfAny();
+        // Mesh uploads happen before the shadow pass in Game.render, not between passes.
 
         // Render chunks
         renderVisibleChunks(context, tightBounds);

@@ -19,7 +19,6 @@ import engine.render.TextureLoader;
 import engine.render.core.RenderContext;
 import engine.render.renderer.ShadowRenderer;
 import engine.render.renderer.SkyRenderer;
-import engine.render.renderer.SunRenderer;
 import engine.render.renderer.VoxelRenderer;
 import engine.test.PerfLogger;
 import engine.test.TestHarness;
@@ -45,7 +44,6 @@ public class PlayingState implements GameState {
     // Renderers and resources that need cleanup
     private ShadowRenderer shadowRenderer;
     private SkyRenderer skyRenderer;
-    private SunRenderer sunRenderer;
     private VoxelRenderer voxelRenderer;
     private Shader voxelShader;
     private Shader depthShader;
@@ -123,7 +121,6 @@ public class PlayingState implements GameState {
         // Create renderers
         shadowRenderer = new ShadowRenderer(depthShader);
         skyRenderer = new SkyRenderer();
-        sunRenderer = new SunRenderer();
         voxelRenderer = new VoxelRenderer(voxelShader, shadowRenderer, atlasTextureId);
 
         // Create game instance
@@ -134,7 +131,6 @@ public class PlayingState implements GameState {
             voxelRenderer,
             shadowRenderer,
             skyRenderer,
-            sunRenderer,
             textRenderer
         );
 
@@ -144,6 +140,12 @@ public class PlayingState implements GameState {
         System.out.println("Shadow light-frustum culling: " + RenderConfig.SHADOW_FRUSTUM_CULLING_ENABLED);
         System.out.println("Tight mesh bounds: shadow=" + RenderConfig.TIGHT_SHADOW_BOUNDS
                 + "; camera=" + RenderConfig.TIGHT_CAMERA_BOUNDS);
+        System.out.println("[CELESTIAL] startHour=" + System.getProperty("voxel.startHour", "saved/default")
+                + "; timeScale=" + world.getTimeManager().getDebugSpeedMultiplier()
+                + "; pauseTime=" + world.getTimeManager().isPaused()
+                + "; worldDays=" + world.getTimeManager().getWorldDays()
+                + "; light=" + world.getTimeManager().celestialState().activeLight()
+                + "; skyMode=" + System.getProperty("voxel.skyMode", "procedural"));
 
         // Initialize test harness (if enabled)
         if (GameConfig.TEST_HARNESS_ENABLED) {
@@ -228,6 +230,13 @@ public class PlayingState implements GameState {
                     + "," + glfwGetWindowAttrib(app.getWindow(), GLFW_VISIBLE)
                     + "," + glfwGetWindowAttrib(app.getWindow(), GLFW_ICONIFIED)
                     + "," + glfwGetInputMode(app.getWindow(), GLFW_CURSOR)
+                    + "," + Shader.CACHE_UNIFORMS + "," + Shader.getLocationQueries()
+                    + "," + RenderConfig.COMPACT_VERTICES
+                    + "," + RenderConfig.SKIP_UNLIT_SHADOWS
+                    + "," + RenderConfig.GREEDY_SHADOWS
+                    + "," + System.getProperty("voxel.skyMode", "procedural")
+                    + "," + renderContext.getCelestialState().activeLight()
+                    + "," + renderContext.getCelestialState().activeElevation()
             );
         }
     }
@@ -268,10 +277,6 @@ public class PlayingState implements GameState {
         if (voxelRenderer != null) {
             voxelRenderer.cleanup();
             voxelRenderer = null;
-        }
-        if (sunRenderer != null) {
-            sunRenderer.cleanup();
-            sunRenderer = null;
         }
         if (skyRenderer != null) {
             skyRenderer.cleanup();

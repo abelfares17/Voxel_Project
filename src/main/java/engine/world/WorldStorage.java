@@ -45,13 +45,27 @@ public class WorldStorage {
         }
 
         // Initialize or load metadata
-        this.metadata = new WorldMetadata();
-        metadata.name = worldName;
-        metadata.seed = seed;
-        metadata.mode = mode;
-        metadata.creationDate = LocalDateTime.now().toString();
-        metadata.gameVersion = "0.1.0";
-        metadata.statistics = new WorldMetadata.Statistics();
+        WorldMetadata loaded;
+        try {
+            loaded = WorldMetadata.load(worldDir);
+        } catch (IOException | RuntimeException e) {
+            throw new IllegalStateException("Cannot load metadata; refusing to overwrite " + worldDir, e);
+        }
+        this.metadata = loaded == null ? new WorldMetadata() : loaded;
+        if (loaded == null) {
+            metadata.name = worldName;
+            metadata.seed = seed;
+            metadata.mode = mode;
+            metadata.creationDate = LocalDateTime.now().toString();
+            metadata.gameVersion = "0.1.0";
+            metadata.statistics = new WorldMetadata.Statistics();
+            metadata.worldDays = engine.time.TimeManager.DEFAULT_DAYS;
+        }
+        metadata.version = 2;
+        if (metadata.worldDays == null || !Double.isFinite(metadata.worldDays) || metadata.worldDays < 0) {
+            System.err.println("[TIME] Missing/invalid saved worldDays in " + worldDir + "; using 08:00.");
+            metadata.worldDays = engine.time.TimeManager.DEFAULT_DAYS;
+        }
 
         // Thread pool for async compression (2 threads to avoid overload)
         this.compressionExecutor = Executors.newFixedThreadPool(2);
@@ -62,6 +76,13 @@ public class WorldStorage {
      * Only call this for dirty chunks.
      * @param chunk Chunk to save
      */
+    public Double getWorldDays() { return metadata.worldDays; }
+
+    public void setWorldDays(double value) {
+        if (!Double.isFinite(value) || value < 0) throw new IllegalArgumentException("Invalid worldDays");
+        metadata.worldDays = value;
+    }
+
     public void saveChunkAsync(Chunk chunk) {
         compressionExecutor.submit(() -> {
             try {

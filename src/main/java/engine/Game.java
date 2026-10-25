@@ -35,7 +35,6 @@ import engine.render.camera.PerspectiveCamera;
 import engine.render.core.RenderContext;
 import engine.render.renderer.ShadowRenderer;
 import engine.render.renderer.SkyRenderer;
-import engine.render.renderer.SunRenderer;
 import engine.render.renderer.VoxelRenderer;
 import engine.util.ScreenCapture;
 import engine.world.Chunk;
@@ -52,7 +51,6 @@ public class Game {
 
     // Renderers
     private final SkyRenderer skyRenderer;
-    private final SunRenderer sunRenderer;
     private final VoxelRenderer voxelRenderer;
     private final ShadowRenderer shadowRenderer;
     private final CameraCullingValidator cameraCullingValidator = new CameraCullingValidator();
@@ -70,7 +68,7 @@ public class Game {
 
     public Game(long window, Input input, World world,
                 VoxelRenderer voxelRenderer, ShadowRenderer shadowRenderer,
-                SkyRenderer skyRenderer, SunRenderer sunRenderer,
+                SkyRenderer skyRenderer,
                 TextRenderer textRenderer) {
         this.window = window;
         this.input = input;
@@ -107,16 +105,11 @@ public class Game {
         this.voxelRenderer = voxelRenderer;
         this.shadowRenderer = shadowRenderer;
         this.skyRenderer = skyRenderer;
-        this.sunRenderer = sunRenderer;
         this.textRenderer = textRenderer;
 
         this.lastTime = System.currentTimeMillis();
 
-        // Set initial camera angles (if not already set by test harness)
-        if (!GameConfig.TEST_HARNESS_ENABLED) {
-            this.player.setYaw(0f);
-            this.player.setPitch(0f);
-        }
+        // Keep the yaw/pitch restored by WorldStorage (new players already default to zero).
     }
 
     public void setAspect(float aspect) {
@@ -129,9 +122,13 @@ public class Game {
     }
 
     public void update(float deltaTimeSec) {
-        long dtMillis = (long)(deltaTimeSec * 1000.0f);
+        world.getTimeManager().updateSeconds(deltaTimeSec);
 
-        world.getTimeManager().update(dtMillis);
+        // Handle cursor transitions before player look consumes this frame's mouse delta.
+        if (!GameConfig.TEST_HARNESS_ENABLED) {
+            if (input.isKeyJustPressed(GLFW_KEY_ESCAPE)) input.setCursorCaptured(false);
+            else if (input.isMousePressed(GLFW_MOUSE_BUTTON_LEFT)) input.setCursorCaptured(true);
+        }
 
         int[] chunkCoords = player.getChunkCoords(GameConfig.CHUNK_WIDTH, GameConfig.CHUNK_DEPTH);
         int playerChunkX = chunkCoords[0];
@@ -150,15 +147,6 @@ public class Game {
         // Toggle spectator mode
         if (input.isKeyPressed(GLFW_KEY_P)) {
             player.setSpectatorMode(!player.isSpectatorMode());
-        }
-
-        // Escape cursor
-        if (input.isKeyPressed(GLFW_KEY_ESCAPE)) {
-            glfwSetInputMode(window, GLFW_CURSOR, GameConfig.INITIAL_CURSOR_MODE);
-        }
-
-        if (input.isMousePressed(GLFW_MOUSE_BUTTON_LEFT)) {
-            glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
         }
 
         // Screenshot (F2)
@@ -189,10 +177,16 @@ public class Game {
             showDebugNotification(modes[voxelRenderer.getDebugShadow()]);
         }
 
+        if (input.isKeyJustPressed(org.lwjgl.glfw.GLFW.GLFW_KEY_F5)) {
+            shadowRenderer.toggleCasterCoverage();
+            showDebugNotification(shadowRenderer.isCasterCoverageEnabled()
+                    ? "CSM casters: corrected coverage" : "CSM casters: legacy coverage");
+        }
+
         // Toggle sun/time pause (F6)
         if (input.isKeyJustPressed(GLFW_KEY_F6)) {
             world.getTimeManager().togglePause();
-            showDebugNotification(world.getTimeManager().isPaused() ? "Sun Pause: ON" : "Sun Pause: OFF");
+            showDebugNotification(world.getTimeManager().isPaused() ? "Time Pause: ON" : "Time Pause: OFF");
         }
 
         // Cycle PCF mode info (F7)
@@ -253,7 +247,7 @@ public class Game {
     }
 
     public void render(RenderContext context, GpuPassTimer gpuTimer) {
-        //world.getMeshManager().uploadMeshesIfAny();
+        world.getMeshManager().uploadMeshesIfAny();
 
         context.setCamera(camera);
         context.setWorld(world);
@@ -262,9 +256,7 @@ public class Game {
         // Cache time-dependent values for frame consistency
         float timeOfDay = world.getTimeManager().getTimeOfDay();
         context.setTimeOfDay(timeOfDay);
-        context.setSkyColor(RenderConfig.getSkyColor(timeOfDay));
-        context.setSunDirLighting(world.getTimeManager().getSunData().sunDir());
-        context.setSunDirShadows(world.getTimeManager().getSunData().sunDir());
+        context.setCelestialState(world.getTimeManager().celestialState());
         context.setDayNightPeriodSec(world.getTimeManager().getDayNightPeriodSec());
 
         if (gpuTimer != null) gpuTimer.beginFrame(context);
@@ -287,13 +279,15 @@ public class Game {
 
         if (cameraCullingValidator.due(context.getDeltaTime())) {
             if (gpuTimer != null) throw new IllegalStateException("Disable GPU timing during camera validation");
-            cameraCullingValidator.validate(context, skyRenderer, sunRenderer, voxelRenderer);
+            cameraCullingValidator.validate(context, skyRenderer, voxelRenderer);
         } else {
-            if (gpuTimer != null) gpuTimer.beginPass(GpuPassTimer.Pass.SKY_SUN);
+            if (gpuTimer != null) gpuTimer.beginPass(GpuPassTimer.COMBINED_SCENE
+                    ? GpuPassTimer.Pass.SCENE : GpuPassTimer.Pass.SKY_SUN);
             skyRenderer.render(context);
-            sunRenderer.render(context);
-            if (gpuTimer != null) gpuTimer.endPass();
-            if (gpuTimer != null) gpuTimer.beginPass(GpuPassTimer.Pass.VOXEL);
+            if (gpuTimer != null && !GpuPassTimer.COMBINED_SCENE) {
+                gpuTimer.endPass();
+                gpuTimer.beginPass(GpuPassTimer.Pass.VOXEL);
+            }
             voxelRenderer.render(context);
             if (gpuTimer != null) gpuTimer.endPass();
         }
@@ -315,12 +309,13 @@ public class Game {
     private void renderUI(RenderContext context) {
         Matrix4f ortho = new Matrix4f().ortho2D(0, winWidth, winHeight, 0);
 
-        float t = world.getTimeManager().getTimeOfDay();
+        float t = context.getTimeOfDay();
         int totalMinutes = (int) (t * 24 * 60);
         totalMinutes = totalMinutes % (24 * 60);
         int hour = totalMinutes / 60;
         int minute = totalMinutes % 60;
-        String heureStr = String.format("%02d:%02d", hour, minute);
+        String heureStr = String.format(java.util.Locale.ROOT, "%02d:%02d  %s %.1f deg", hour, minute,
+                context.getCelestialState().activeLight(), context.getCelestialState().activeElevation());
 
         float textScale = 2.0f;
         textRenderer.drawText(

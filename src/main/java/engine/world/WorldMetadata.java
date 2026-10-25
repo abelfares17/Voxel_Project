@@ -13,7 +13,9 @@ import java.time.LocalDateTime;
  */
 public class WorldMetadata {
     // Version for backward compatibility
-    public int version = 1;
+    public int version = 2;
+    // Optional in v1 saves; simulation days, no wall-clock/offline progression.
+    public Double worldDays;
 
     // Core world info
     public String name;              // "World 1"

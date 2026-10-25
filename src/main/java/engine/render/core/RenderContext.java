@@ -21,6 +21,16 @@ public class RenderContext {
     private float aspectRatio;
     private float dayNightPeriodSec;
     private int fpsReal;
+    private engine.time.CelestialState celestialState = engine.time.CelestialState.at(engine.time.TimeManager.DEFAULT_DAYS);
+
+    public engine.time.CelestialState getCelestialState() { return celestialState; }
+    public void setCelestialState(engine.time.CelestialState state) {
+        celestialState = java.util.Objects.requireNonNull(state);
+        skyColor.set(state.horizon());
+        // Legacy solar accessors remain solar, never aliases for the moon.
+        sunDirLighting.set(state.sunDirection());
+        sunDirShadows.set(state.sunDirection());
+    }
 
     // ═══════════════════════════════════════════════════════════════════════════
     // SUN DIRECTION SPLIT

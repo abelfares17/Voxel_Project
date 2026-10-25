@@ -12,6 +12,10 @@ import org.joml.Vector3f;
  * - Fog settings
  */
 public class RenderConfig {
+    /** Position-only merged shadow geometry; false retains the reference visual-mesh path. */
+    public static final boolean GREEDY_SHADOWS = Boolean.parseBoolean(System.getProperty("voxel.greedyShadows", "true"));
+    public static final boolean SKIP_UNLIT_SHADOWS = Boolean.parseBoolean(System.getProperty("voxel.skipUnlitShadows", "false"));
+    public static final boolean COMPACT_VERTICES = Boolean.parseBoolean(System.getProperty("voxel.compactVertices", "true"));
     /** Per-mesh uint32 indices; override false for the non-indexed benchmark reference. */
     public static final boolean INDEXED_MESHES =
             Boolean.parseBoolean(System.getProperty("voxel.indexedMeshes", "true"));
@@ -295,44 +299,11 @@ public class RenderConfig {
      * Calculate sky color based on time of day.
      * If freezeSkyColor is enabled, always returns SKY_COLOR_DAY.
      *
-     * @param timeOfDay Normalized time (0.0 to 1.0, where 0.0 = 6:00 AM)
+     * @param timeOfDay Normalized time (0 = midnight). Legacy facade; rendering uses CelestialState.
      * @return Sky color for the given time
      */
     public static Vector3f getSkyColor(float timeOfDay) {
-        // When frozen, always return day sky color (workaround for shadow transition flashes)
-        if (freezeSkyColor) {
-            return new Vector3f(SKY_COLOR_DAY);
-        }
-
-        // Normalize to 0-1 range with 6AM offset
-        float t = (timeOfDay + 0.25f) % 1.0f;
-
-        if (t < TIME_DAWN_START) {
-            // Deep night (before 4:00 AM)
-            return new Vector3f(SKY_COLOR_NIGHT);
-        } else if (t < TIME_DAWN_MID) {
-            // 4:00 AM - 6:00 AM: Night → Dawn transition
-            float alpha = (t - TIME_DAWN_START) / (TIME_DAWN_MID - TIME_DAWN_START);
-            return lerpColor(SKY_COLOR_NIGHT, SKY_COLOR_DAWN, alpha);
-        } else if (t < TIME_DAY_START) {
-            // 6:00 AM - 8:00 AM: Dawn → Day transition
-            float alpha = (t - TIME_DAWN_MID) / (TIME_DAY_START - TIME_DAWN_MID);
-            return lerpColor(SKY_COLOR_DAWN, SKY_COLOR_DAY, alpha);
-        } else if (t < TIME_DUSK_START) {
-            // 8:00 AM - 4:00 PM: Full daylight
-            return new Vector3f(SKY_COLOR_DAY);
-        } else if (t < TIME_DUSK_MID) {
-            // 4:00 PM - 6:00 PM: Day → Dusk transition
-            float alpha = (t - TIME_DUSK_START) / (TIME_DUSK_MID - TIME_DUSK_START);
-            return lerpColor(SKY_COLOR_DAY, SKY_COLOR_DAWN, alpha);
-        } else if (t < TIME_NIGHT_START) {
-            // 6:00 PM - 8:00 PM: Dusk → Night transition
-            float alpha = (t - TIME_DUSK_MID) / (TIME_NIGHT_START - TIME_DUSK_MID);
-            return lerpColor(SKY_COLOR_DAWN, SKY_COLOR_NIGHT, alpha);
-        } else {
-            // 8:00 PM - 4:00 AM: Night
-            return new Vector3f(SKY_COLOR_NIGHT);
-        }
+        return engine.time.CelestialState.at(timeOfDay).horizon();
     }
 
     /**
@@ -365,29 +336,6 @@ public class RenderConfig {
      * @return Sun color with fade applied
      */
     public static Vector3f getSunColor(float sunY) {
-        // Calculate fade factor
-        float fade = 1.0f;
-        if (sunY < SUN_FADE_START) {
-            if (sunY > SUN_FADE_END) {
-                fade = (sunY - SUN_FADE_END) / (SUN_FADE_START - SUN_FADE_END);
-            } else {
-                fade = 0.0f;
-            }
-        }
-
-        // Calculate intensity-based color
-        float intensity = Math.max(SUN_MIN_INTENSITY, sunY);
-        Vector3f baseColor = new Vector3f(
-                SUN_COLOR_RED,
-                Math.max(SUN_COLOR_GREEN_MIN, intensity),
-                Math.max(SUN_COLOR_BLUE_MIN, intensity * SUN_COLOR_BLUE_INTENSITY)
-        );
-
-        // Apply fade
-        return new Vector3f(
-                baseColor.x * fade,
-                baseColor.y * fade,
-                baseColor.z * fade
-        );
+        return engine.time.CelestialState.solarColor(sunY);
     }
 }

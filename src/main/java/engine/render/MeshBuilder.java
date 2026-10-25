@@ -40,10 +40,22 @@ public class MeshBuilder {
     }
 
     public static MeshData generateMeshData(Chunk chunk, World world, boolean indexed) {
+        return generateMeshData(chunk, world, indexed, engine.core.config.RenderConfig.COMPACT_VERTICES);
+    }
+
+    public static MeshData generateMeshData(Chunk chunk, World world, boolean indexed, boolean compact) {
         List<Quad> quads = generateVisibleQuads(chunk, world);
+        if (Boolean.getBoolean("voxel.probeShadowMerge")) {
+            long start = System.nanoTime();
+            var result = ShadowMergeProbe.measure(quads);
+            System.out.println("SHADOW_MERGE_PROBE chunk=" + chunk.getChunkX() + "," + chunk.getChunkZ()
+                    + " faces=" + result.faces() + " rectangles=" + result.rectangles()
+                    + " ns=" + (System.nanoTime() - start));
+        }
         int vertexCount = Math.multiplyExact(quads.size(), indexed ? 4 : 6);
         FloatBuffer fb = org.lwjgl.system.MemoryUtil.memAllocFloat(vertexCount * (POS_SIZE + TEX_SIZE + NOR_SIZE + AO_SIZE));
         java.nio.IntBuffer indices = null;
+        java.nio.ByteBuffer packed = null;
         try {
             if (indexed) indices = MemoryUtil.memAllocInt(Math.multiplyExact(quads.size(), 6));
             int base = 0;
@@ -64,10 +76,20 @@ public class MeshBuilder {
             }
             fb.flip();
             if (indices != null) indices.flip();
-            return new MeshData(fb, vertexCount, chunk, MeshBounds.fromVertices(fb, vertexCount), indices);
+            MeshBounds bounds = MeshBounds.fromVertices(fb, vertexCount);
+            if (compact) packed = MeshVertexLayout.pack(fb, vertexCount);
+            float[] shadowPositions = null;
+            if (engine.core.config.RenderConfig.GREEDY_SHADOWS || Boolean.getBoolean("voxel.validateGreedyShadows")
+                    || Boolean.getBoolean("voxel.compareGreedyImages"))
+                shadowPositions = ShadowMesh.positions(quads);
+            MeshData data = new MeshData(compact ? null : fb, vertexCount, chunk, bounds, indices, packed);
+            data.shadowPositions = shadowPositions;
+            if (compact) { MemoryUtil.memFree(fb); fb = null; }
+            return data;
         } catch (RuntimeException | Error failure) {
+            if (packed != null) MemoryUtil.memFree(packed);
             if (indices != null) MemoryUtil.memFree(indices);
-            MemoryUtil.memFree(fb);
+            if (fb != null) MemoryUtil.memFree(fb);
             throw failure;
         }
     }
@@ -75,7 +97,6 @@ public class MeshBuilder {
     public static void buildChunkMesh(Chunk chunk, World world) {
         chunk.cleanup();
         MeshData data = generateMeshData(chunk, world);
-        FloatBuffer fb = data.vertexBuffer;
         try {
 
             int vao = glGenVertexArrays();
@@ -83,29 +104,14 @@ public class MeshBuilder {
 
             int vbo = glGenBuffers();
             glBindBuffer(GL_ARRAY_BUFFER, vbo);
-            glBufferData(GL_ARRAY_BUFFER, fb, GL_STATIC_DRAW);
-
-            // Attrib position (location = 0)
-            glEnableVertexAttribArray(0);
-            glVertexAttribPointer(0, POS_SIZE, GL_FLOAT, false, STRIDE, 0);
-
-            // Attrib texcoord (location = 1)
-            glEnableVertexAttribArray(1);
-            glVertexAttribPointer(1, TEX_SIZE, GL_FLOAT, false, STRIDE, POS_SIZE * FLOAT_SIZE);
-
-            // Attrib normal (location = 2)
-            glEnableVertexAttribArray(2);
-            glVertexAttribPointer(2, NOR_SIZE, GL_FLOAT, false, STRIDE, (POS_SIZE + TEX_SIZE) * FLOAT_SIZE);
-
-            // Attrib AO (location = 3)
-            glEnableVertexAttribArray(3);
-            glVertexAttribPointer(3, AO_SIZE, GL_FLOAT, false, STRIDE, (POS_SIZE + TEX_SIZE + NOR_SIZE) * FLOAT_SIZE);
+            MeshVertexLayout.upload(data);
 
             int ebo = uploadIndices(data);
             glBindVertexArray(0);
             glBindBuffer(GL_ARRAY_BUFFER, 0);
 
-            chunk.setMesh(vao, vbo, data.vertexCount, data.bounds, ebo, data.indexCount);
+            chunk.setMesh(vao, vbo, data.vertexCount, data.bounds, ebo, data.indexCount, data.vertexStride());
+            if (data.shadowPositions != null) chunk.setShadowMesh(ShadowMesh.upload(data.shadowPositions));
         } finally {
             data.free();
         }

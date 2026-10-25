@@ -64,9 +64,7 @@ public class TestHarness {
         // Enable spectator mode for direct position control
         player.setSpectatorMode(true);
 
-        if (timeManager.isPaused() != staticScene) {
-            timeManager.togglePause();
-        }
+        timeManager.setPaused(staticScene || Boolean.getBoolean("voxel.pauseTime"));
 
         System.out.println("═══════════════════════════════════════════════════════════");
         System.out.println("TEST HARNESS STARTED");

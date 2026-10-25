@@ -1,6 +1,7 @@
 package engine.world;
 
 import java.util.*;
+import engine.core.config.GameConfig;
 
 import engine.core.config.RenderConfig;
 import engine.render.MeshBounds;
@@ -33,6 +34,8 @@ public class World {
 
     public void resetDepthStats() { depthDrawCalls = 0; depthVertices = 0; }
     public int getDepthDrawCalls() { return depthDrawCalls; }
+    /** GL/main-thread view: callers must not mutate the loaded chunk collection. */
+    public Collection<Chunk> getLoadedChunksForRendering() { return Collections.unmodifiableCollection(chunks.values()); }
     public long getDepthVertices() { return depthVertices; }
 
     public enum Mode {
@@ -46,6 +49,7 @@ public class World {
         this.renderDistance = renderDistance;
         this.seed = seed;
         this.storage = new WorldStorage(worldName, seed, mode.toString());
+        if (!GameConfig.TEST_HARNESS_ENABLED) timeManager.restoreWorldDays(storage.getWorldDays());
         this.worldGenerator = new WorldGenerator(seed, this);
         this.meshManager = new MeshWorkerManager(this, Runtime.getRuntime().availableProcessors());
 
@@ -263,6 +267,8 @@ public class World {
     }
 
     public void save() {
+        if (GameConfig.TEST_HARNESS_ENABLED) return;
+        if (!timeManager.hasLaunchOverrides()) storage.setWorldDays(timeManager.getWorldDays());
         // Save all dirty chunks (modified data)
         for (Chunk chunk : chunks.values()) {
             if (chunk.isDataDirty()) {
@@ -376,6 +382,10 @@ public class World {
 
     /** Optional light-space frustum, never the camera frustum: off-screen casters stay eligible. */
     public void renderDepth(Shader depthShader, Vector3f center, float radius, FrustumIntersection lightFrustum) {
+        renderDepth(depthShader, center, radius, lightFrustum, RenderConfig.GREEDY_SHADOWS);
+    }
+
+    public void renderDepth(Shader depthShader, Vector3f center, float radius, FrustumIntersection lightFrustum, boolean greedy) {
         float radiusSq = radius > 0 ? radius * radius : -1.0f;
         float centerX = center != null ? center.x : 0.0f;
         float centerZ = center != null ? center.z : 0.0f;
@@ -410,10 +420,14 @@ public class World {
             depthModelMatrix.translation(worldX, 0, worldZ);
             depthShader.setMat4("modelMatrix", depthModelMatrix);
 
-            glBindVertexArray(vao);
-            engine.render.MeshBuilder.drawBoundChunk(chunk);
+            boolean useShadow = greedy && chunk.getShadowMesh() != null;
+            if (useShadow) chunk.getShadowMesh().draw();
+            else {
+                glBindVertexArray(vao);
+                engine.render.MeshBuilder.drawBoundChunk(chunk);
+            }
             depthDrawCalls++;
-            depthVertices += chunk.getDrawCount();
+            depthVertices += useShadow ? chunk.getShadowMesh().count : chunk.getDrawCount();
         }
 
         glBindVertexArray(0);

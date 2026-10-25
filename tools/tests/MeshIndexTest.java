@@ -53,8 +53,8 @@ public final class MeshIndexTest {
     }
 
     static void compare(Chunk source, World world, boolean large) {
-        MeshData a = MeshBuilder.generateMeshData(source, world, false);
-        MeshData b = MeshBuilder.generateMeshData(source, world, true);
+        MeshData a = MeshBuilder.generateMeshData(source, world, false, false);
+        MeshData b = MeshBuilder.generateMeshData(source, world, true, engine.core.config.RenderConfig.COMPACT_VERTICES);
         Chunk gpu = new Chunk(0, 0);
         int program = 0;
         try {
@@ -65,7 +65,7 @@ public final class MeshIndexTest {
                 int index = b.indexBuffer.get(i);
                 check(index >= 0 && index < b.vertexCount, "index range");
                 for (int c = 0; c < 9; c++) check(Float.floatToRawIntBits(a.vertexBuffer.get(i * 9 + c))
-                        == Float.floatToRawIntBits(b.vertexBuffer.get(index * 9 + c)), "expanded attribute mismatch");
+                        == Float.floatToRawIntBits(attribute(b, index, c)), "expanded attribute mismatch");
             }
             program = glCreateProgram();
             int vs = shader(GL_VERTEX_SHADER, "#version 150\nin vec3 p; in vec2 uv; in vec3 n; in float ao; uniform mat4 m; out vec3 color; void main(){gl_Position=m*vec4(p,1);color=vec3(uv,ao)*0.5+abs(n)*0.5;}");
@@ -109,12 +109,19 @@ public final class MeshIndexTest {
     static void install(Chunk chunk, MeshData data) {
         int vao = glGenVertexArrays(), vbo = glGenBuffers();
         glBindVertexArray(vao); glBindBuffer(GL_ARRAY_BUFFER, vbo);
-        glBufferData(GL_ARRAY_BUFFER, data.vertexBuffer, GL_STATIC_DRAW);
-        int[] size = {3, 2, 3, 1}, offset = {0, 12, 20, 32};
-        for (int i = 0; i < 4; i++) { glEnableVertexAttribArray(i); glVertexAttribPointer(i, size[i], GL_FLOAT, false, 36, offset[i]); }
+        MeshVertexLayout.upload(data);
         int ebo = MeshBuilder.uploadIndices(data);
         glBindVertexArray(0);
-        chunk.setMesh(vao, vbo, data.vertexCount, data.bounds, ebo, data.indexCount);
+        chunk.setMesh(vao, vbo, data.vertexCount, data.bounds, ebo, data.indexCount, data.vertexStride());
+    }
+
+    static float attribute(MeshData data, int vertex, int component) {
+        if (data.packedVertices == null) return data.vertexBuffer.get(vertex * 9 + component);
+        int base = vertex * 24;
+        if (component < 3) return Short.toUnsignedInt(data.packedVertices.getShort(base + component * 2));
+        if (component < 5) return data.packedVertices.getFloat(base + 12 + (component - 3) * 4);
+        if (component < 8) return data.packedVertices.get(base + 6 + component - 5);
+        return data.packedVertices.getFloat(base + 20);
     }
 
     static float[] pixels(Chunk chunk) {

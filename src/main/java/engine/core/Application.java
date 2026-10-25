@@ -242,7 +242,7 @@ public class Application {
             stateManager = new StateManager(new MenuState(this, renderContext, input));
         }
 
-        lastFrameTime = System.currentTimeMillis();
+        lastFrameTime = System.nanoTime();
     }
 
     /**
@@ -255,8 +255,8 @@ public class Application {
                 input.update();
 
                 // Calculate delta time
-                long currentTime = System.currentTimeMillis();
-                float deltaTime = (currentTime - lastFrameTime) / 1000.0f;
+                long currentTime = System.nanoTime();
+                float deltaTime = (float)((currentTime - lastFrameTime) / 1_000_000_000.0);
                 lastFrameTime = currentTime;
 
                 long t0 = System.nanoTime();
@@ -264,7 +264,11 @@ public class Application {
                 // Update current state (with exception handling)
                 long tUpdate0 = System.nanoTime();
                 try {
-                    stateManager.update(deltaTime);
+                    if (stateManager.update(deltaTime)) {
+                        // Exclude blocking enter()/loading work from the next simulation delta.
+                        lastFrameTime = System.nanoTime();
+                        deltaTime = 0f;
+                    }
                 } catch (Throwable t) {
                     CrashHandler.fatal("State Update", t);
                     glfwSetWindowShouldClose(window, true);

@@ -22,30 +22,50 @@ import engine.time.SunData;
 
 /**
  * Renderer responsible for Cascaded Shadow Mapping (CSM).
- * Uses triple-buffered leapfrogging (A/B/C) for continuous shadow updates.
- *
- * Atlas design: A and B share one texture (shadowAtlas, cascadeCount*2 layers).
- * atlasOffsetA / atlasOffsetB track which half of the atlas each buffer occupies.
- * On SWAP, only the offsets are exchanged — zero-cost, no GPU copy.
- * C uses a separate staging texture (never sampled by the voxel shader).
+ * Direct solar/lunar CSM: one three-layer atlas, fully redrawn per lit frame.
+ * Historical leapfrog methods are dormant and cannot be enabled in this pipeline.
  */
 public class ShadowRenderer implements Renderer {
 
     private int fbo;
+    private engine.time.CelestialState renderedCelestial;
+    public boolean hasCurrentShadowMap(RenderContext context) {
+        return renderedCelestial == context.getCelestialState() && dataA != null;
+    }
     private final Shader depthShader;
     private final CSMCalculator csmCalculator;
     private final FrustumIntersection lightFrustum = new FrustumIntersection();
     // Expensive correctness test only: never enable during a performance run.
-    private final boolean validateCulling = Boolean.getBoolean("voxel.validateShadowCulling");
+    private final boolean validateCulling = Boolean.getBoolean("voxel.validateShadowCulling")
+            || Boolean.getBoolean("voxel.validateGreedyShadows");
     private float validationElapsed;
     private float nextValidation;
     private boolean validateThisFrame;
+    private Boolean diagnosticGreedy;
+    private boolean casterCoverage = Boolean.parseBoolean(System.getProperty("voxel.casterCoverage", "true"));
+    private final float[] depthBiasScales = new float[RenderConfig.CSM_CASCADE_COUNT];
+    public float[] getDepthBiasScales() { return depthBiasScales; }
+    public boolean isCasterCoverageEnabled() { return casterCoverage; }
+    public void toggleCasterCoverage() { casterCoverage = !casterCoverage; }
+    private float casterRadius(CascadeData data, int cascade) {
+        return casterCoverage && !leapfrogEnabled ? -1f : data.cullRadius(cascade);
+    }
+
+    /** Replay only the current A matrices: no solar/camera update, swap or diagnostic recursion. */
+    public void replayForImageComparison(RenderContext context, boolean greedy) {
+        if (leapfrogEnabled || dataA == null) throw new IllegalStateException("Image comparison requires initialized direct CSM");
+        boolean savedValidation = validateThisFrame;
+        diagnosticGreedy = greedy;
+        validateThisFrame = false;
+        try { renderShadowMapIntoAtlas(context, shadowAtlas, atlasOffsetA, dataA); }
+        finally { diagnosticGreedy = null; validateThisFrame = savedValidation; }
+    }
 
     // ═══════════════════════════════════════════════════════════════════════════
     // SHADOW MAP TEXTURES
     // ═══════════════════════════════════════════════════════════════════════════
 
-    // Unified atlas for A+B: cascadeCount*2 layers.
+    // Direct atlas: cascadeCount layers. A/B aliases remain only for the legacy interface.
     // layers [atlasOffsetA .. atlasOffsetA+C-1] = A
     // layers [atlasOffsetB .. atlasOffsetB+C-1] = B
     private int shadowAtlas;
@@ -118,7 +138,7 @@ public class ShadowRenderer implements Renderer {
     private enum LeapState { OFF, WARMUP, RUNNING }
 
     private LeapState leapState = LeapState.WARMUP;
-    private boolean leapfrogEnabled = RenderConfig.LEAPFROG_SHADOWS_ENABLED;
+    private boolean leapfrogEnabled = false;
 
     // ═══════════════════════════════════════════════════════════════════════════
     // TIMING CONFIGURATION
@@ -161,6 +181,7 @@ public class ShadowRenderer implements Renderer {
     // ═══════════════════════════════════════════════════════════════════════════
 
     public ShadowRenderer(Shader depthShader) {
+        java.util.Arrays.fill(depthBiasScales, 1f);
         this.cascadeCountCached = RenderConfig.CSM_CASCADE_COUNT;
         this.depthShader = depthShader;
         this.csmCalculator = new CSMCalculator();
@@ -169,19 +190,19 @@ public class ShadowRenderer implements Renderer {
         int cascadeCount = RenderConfig.CSM_CASCADE_COUNT;
         int shadowMapSize = RenderConfig.CSM_SHADOW_MAP_SIZE;
 
-        // Atlas offsets: A starts at layer 0, B starts at layer cascadeCount
+        // A and B alias the single direct atlas; leapfrog is unavailable.
         atlasOffsetA = 0;
-        atlasOffsetB = cascadeCount;
+        atlasOffsetB = 0;
 
         // Create FBO
         fbo = glGenFramebuffers();
         glBindFramebuffer(GL_FRAMEBUFFER, fbo);
 
-        // Unified atlas for A+B (cascadeCount*2 layers)
-        shadowAtlas = createShadowMapArray(cascadeCount * 2, shadowMapSize);
+        // One solar/lunar atlas (cascadeCount layers)
+        shadowAtlas = createShadowMapArray(cascadeCount, shadowMapSize);
 
         // Separate staging texture for C (only allocated if leapfrog is active)
-        if (RenderConfig.LEAPFROG_SHADOWS_ENABLED) {
+        if (leapfrogEnabled) {
             shadowMapArrayC = createShadowMapArray(cascadeCount, shadowMapSize);
         } else {
             shadowMapArrayC = 0;
@@ -197,7 +218,7 @@ public class ShadowRenderer implements Renderer {
         checkAndFixAtlasFBO();
 
         // Initialize all layers to depth 1.0
-        clearShadowMapArrayLayers(shadowAtlas, cascadeCount * 2, shadowMapSize);
+        clearShadowMapArrayLayers(shadowAtlas, cascadeCount, shadowMapSize);
         if (shadowMapArrayC != 0) {
             clearShadowMapArrayLayers(shadowMapArrayC, cascadeCount, shadowMapSize);
         }
@@ -265,7 +286,7 @@ public class ShadowRenderer implements Renderer {
             glDeleteTextures(shadowAtlas);
             int savedFormat = RenderConfig.SHADOW_MAP_FORMAT;
             RenderConfig.SHADOW_MAP_FORMAT = 0;
-            shadowAtlas = createShadowMapArray(cascadeCountCached * 2, RenderConfig.CSM_SHADOW_MAP_SIZE);
+            shadowAtlas = createShadowMapArray(cascadeCountCached, RenderConfig.CSM_SHADOW_MAP_SIZE);
             RenderConfig.SHADOW_MAP_FORMAT = savedFormat; // restore so CSV reflects intent
         }
     }
@@ -305,6 +326,14 @@ public class ShadowRenderer implements Renderer {
 
     @Override
     public void render(RenderContext context) {
+        renderedCelestial = null;
+        renderedAThisFrame = false;
+        if (context.getCelestialState().activeLight() == engine.time.CelestialState.Light.NONE) {
+            dataA = null;
+            dataB = null;
+            return;
+        }
+        java.util.Arrays.fill(depthBiasScales, 1f);
         validationElapsed += context.getDeltaTime();
         validateThisFrame = validateCulling && RenderConfig.SHADOW_FRUSTUM_CULLING_ENABLED
                 && validationElapsed >= nextValidation;
@@ -320,6 +349,7 @@ public class ShadowRenderer implements Renderer {
 
         try {
             renderInternal(context);
+            renderedCelestial = context.getCelestialState();
         } finally {
             glBindFramebuffer(GL_FRAMEBUFFER, 0);
             glDrawBuffer(GL_BACK);
@@ -342,7 +372,7 @@ public class ShadowRenderer implements Renderer {
         }
         computeCameraBasisFromViewMatrix(view);
 
-        Vector3f sunDirNow = context.getSunDirShadows();
+        Vector3f sunDirNow = context.getCelestialState().lightDirection();
 
         if (!leapfrogEnabled) {
             renderOffMode(context, camera, sunDirNow);
@@ -364,17 +394,28 @@ public class ShadowRenderer implements Renderer {
         leapState = LeapState.OFF;
         crossfadeProgress = 1.0f;
 
-        boolean basisUpdated = csmCalculator.updateLightBasis(sunDir, true);
+        csmCalculator.updateLightBasis(sunDir, true);
         CascadeData candA = csmCalculator.computeCascadeMatrices(camera, camForward, camRight, camUp);
-        int ixA = snapIndexX(candA), iyA = snapIndexY(candA);
-
-        if (dataA == null || basisUpdated || ixA != lastSnapIxA || iyA != lastSnapIyA) {
-            dataA = candA;
-            renderShadowMapIntoAtlas(context, shadowAtlas, atlasOffsetA, dataA);
-            renderedAThisFrame = true;
-            lastSnapIxA = ixA;
-            lastSnapIyA = iyA;
+        if (casterCoverage) {
+            for (int i = 0; i < candA.cascadeCount(); i++) {
+                var volume = new engine.render.shadow.ShadowCasterVolume(candA.lightSpaceMatrices()[i]);
+                for (var chunk : context.getWorld().getLoadedChunksForRendering()) {
+                    if (!chunk.isReady()) continue;
+                    var bounds = chunk.getMeshBounds();
+                    if (bounds == null) bounds = new engine.render.MeshBounds(0,0,0,
+                            engine.world.Chunk.WIDTH,engine.world.Chunk.HEIGHT,engine.world.Chunk.DEPTH);
+                    volume.include(bounds, chunk.getChunkX()*engine.world.Chunk.WIDTH,
+                            chunk.getChunkZ()*engine.world.Chunk.DEPTH);
+                }
+                depthBiasScales[i] = volume.apply(candA.lightSpaceMatrices()[i]);
+            }
         }
+        // Geometry may have changed even with a paused sun and unchanged camera snap.
+        dataA = candA;
+        renderShadowMapIntoAtlas(context, shadowAtlas, atlasOffsetA, dataA);
+        renderedAThisFrame = true;
+        lastSnapIxA = snapIndexX(candA);
+        lastSnapIyA = snapIndexY(candA);
         dataB = dataA;
     }
 
@@ -597,6 +638,9 @@ public class ShadowRenderer implements Renderer {
 
         glDisable(GL_BLEND);
         glDisable(GL_SCISSOR_TEST);
+        glDisable(GL_STENCIL_TEST);
+        glFrontFace(GL_CCW);
+        glClearDepth(1);
         glEnable(GL_DEPTH_TEST);
         glDepthFunc(GL_LESS);
         glDepthMask(true);
@@ -738,31 +782,65 @@ public class ShadowRenderer implements Renderer {
             lightFrustum.set(data.lightSpaceMatrices()[cascade]);
             frustum = lightFrustum;
         }
-        context.getWorld().renderDepth(depthShader, data.sphereCenter(cascade), data.cullRadius(cascade), frustum);
+        if (diagnosticGreedy != null)
+            context.getWorld().renderDepth(depthShader, data.sphereCenter(cascade), casterRadius(data, cascade), frustum, diagnosticGreedy);
+        else context.getWorld().renderDepth(depthShader, data.sphereCenter(cascade), casterRadius(data, cascade), frustum);
         if (validateThisFrame) validateCascadeDepth(context, data, cascade);
     }
 
     /** Compare the same cascade/pose/sun/meshes; restores reference depth in the bound attachment. */
     private void validateCascadeDepth(RenderContext context, CascadeData data, int cascade) {
+        boolean greedyValidation = Boolean.getBoolean("voxel.validateGreedyShadows");
         int size = RenderConfig.CSM_SHADOW_MAP_SIZE;
         FloatBuffer culled = MemoryUtil.memAllocFloat(size * size);
         try {
             FloatBuffer reference = MemoryUtil.memAllocFloat(size * size);
             try {
+                if (greedyValidation) {
+                    glClear(GL_DEPTH_BUFFER_BIT);
+                    context.getWorld().renderDepth(depthShader, data.sphereCenter(cascade), casterRadius(data, cascade), lightFrustum, true);
+                }
                 glReadPixels(0, 0, size, size, GL_DEPTH_COMPONENT, GL_FLOAT, culled);
                 glClear(GL_DEPTH_BUFFER_BIT);
-                context.getWorld().renderDepth(depthShader, data.sphereCenter(cascade), data.cullRadius(cascade));
+                if (greedyValidation)
+                    context.getWorld().renderDepth(depthShader, data.sphereCenter(cascade), casterRadius(data, cascade), lightFrustum, false);
+                else context.getWorld().renderDepth(depthShader, data.sphereCenter(cascade), casterRadius(data, cascade));
                 glReadPixels(0, 0, size, size, GL_DEPTH_COMPONENT, GL_FLOAT, reference);
                 int error = glGetError();
                 if (error != GL_NO_ERROR) throw new IllegalStateException("Shadow validation GL error: " + error);
                 int differences = 0;
+                int coverageDifferences = 0;
+                float maxError = 0;
+                int largeErrors = 0, edgeExplained = 0;
                 for (int i = 0; i < culled.capacity(); i++) {
+                    // Diagnostic only: is a large discrepancy a neighboring depth discontinuity?
+                    // 1e-4 is a histogram threshold, NOT a correctness tolerance.
+                    if (greedyValidation && Math.abs(culled.get(i) - reference.get(i)) > 1e-4f) {
+                        largeErrors++;
+                        boolean matchA = false, matchB = false;
+                        int x = i % size, y = i / size;
+                        for (int dy = -1; dy <= 1; dy++) for (int dx = -1; dx <= 1; dx++) {
+                            int nx = x + dx, ny = y + dy;
+                            if (nx < 0 || ny < 0 || nx >= size || ny >= size) continue;
+                            int j = ny * size + nx;
+                            matchA |= Math.abs(culled.get(i) - reference.get(j)) <= 1e-4f;
+                            matchB |= Math.abs(reference.get(i) - culled.get(j)) <= 1e-4f;
+                        }
+                        if (matchA && matchB) edgeExplained++;
+                    }
+                    maxError = Math.max(maxError, Math.abs(culled.get(i) - reference.get(i)));
+                    if ((culled.get(i) == 1f) != (reference.get(i) == 1f)) coverageDifferences++;
                     if (Float.floatToIntBits(culled.get(i)) != Float.floatToIntBits(reference.get(i))) differences++;
                 }
-                if (differences != 0) {
+                if (greedyValidation) {
+                    System.out.println("Greedy shadow comparison: cascade=" + cascade + "; differences=" + differences
+                            + "; coverage=" + coverageDifferences + "; maxDepthError=" + maxError);
+                    System.out.println("Greedy depth distribution: cascade=" + cascade + "; above1e-4=" + largeErrors
+                            + "; mutualNeighborMatch=" + edgeExplained + "; elapsed=" + validationElapsed);
+                } else if (differences != 0) {
                     throw new IllegalStateException("Shadow culling changed " + differences + " depth texels in cascade " + cascade);
                 }
-                System.out.println("Shadow culling validation PASS: cascade=" + cascade
+                if (!greedyValidation) System.out.println("Shadow culling validation PASS: cascade=" + cascade
                         + "; elapsed=" + validationElapsed + "; compared=" + culled.capacity() + " depth texels");
             } finally {
                 MemoryUtil.memFree(reference);
@@ -788,7 +866,7 @@ public class ShadowRenderer implements Renderer {
     public CascadeData getCascadeData() { return dataA; }
 
     /**
-     * The unified shadow atlas (A+B in one texture).
+     * The direct solar/lunar shadow atlas (three layers).
      * VoxelRenderer binds this to "shadowAtlas" sampler on unit 1.
      */
     public int getShadowAtlas() { return shadowAtlas; }
@@ -813,12 +891,9 @@ public class ShadowRenderer implements Renderer {
     public boolean isLeapfrogEnabled()       { return leapfrogEnabled; }
 
     public void setLeapfrogEnabled(boolean enabled) {
-        this.leapfrogEnabled = enabled;
-        if (!enabled) {
-            leapState = LeapState.OFF;
-        } else if (leapState == LeapState.OFF) {
-            leapState = LeapState.WARMUP;
-        }
+        if (enabled) System.out.println("Leapfrog unavailable: solar/lunar CSM uses direct updates.");
+        this.leapfrogEnabled = false;
+        leapState = LeapState.OFF;
     }
 
     public void toggleLeapfrog() { setLeapfrogEnabled(!leapfrogEnabled); }

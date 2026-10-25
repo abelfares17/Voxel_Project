@@ -34,8 +34,10 @@ public class StateManager {
     /**
      * Update current state.
      * @param deltaTime Time since last frame
+     * @return true after a transition; caller must reset its clock after blocking enter work
      */
-    public void update(float deltaTime) {
+    public boolean update(float deltaTime) {
+        boolean transitioned = transitionPending;
         // Process pending transition
         if (transitionPending) {
             performTransition();
@@ -43,8 +45,10 @@ public class StateManager {
 
         // Update current state
         if (currentState != null) {
-            currentState.update(deltaTime);
+            // A delta measured in the previous state does not belong to the new simulation.
+            currentState.update(transitioned ? 0f : deltaTime);
         }
+        return transitioned;
     }
 
     /**

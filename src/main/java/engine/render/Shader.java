@@ -12,7 +12,28 @@ import static org.lwjgl.opengl.GL20.*;
 import static org.lwjgl.opengl.GL30.*;
 
 public class Shader {
+    public static final boolean CACHE_UNIFORMS = Boolean.parseBoolean(System.getProperty("voxel.cacheUniforms", "false"));
+    private static final boolean VERIFY_CACHE = Boolean.getBoolean("voxel.verifyUniformCache");
+    private static long locationQueries;
+    private final java.util.Map<String, Integer> uniformLocations = new java.util.HashMap<>();
     private final int programId;
+
+    public static long getLocationQueries() { return locationQueries; }
+
+    // This Shader links once in its constructor. A future relink must invalidate this map.
+    private int uniformLocation(String name) {
+        Integer cached = CACHE_UNIFORMS ? uniformLocations.get(name) : null;
+        if (cached != null) {
+            if (VERIFY_CACHE && cached != glGetUniformLocation(programId, name)) {
+                throw new IllegalStateException("Stale uniform location: " + name);
+            }
+            return cached;
+        }
+        locationQueries++;
+        int location = glGetUniformLocation(programId, name);
+        if (CACHE_UNIFORMS) uniformLocations.put(name, location); // Includes inactive uniforms (-1).
+        return location;
+    }
     private final String vertexPath;
     private final String fragmentPath;
 
@@ -88,6 +109,7 @@ public class Shader {
     public void cleanup() {
         unbind();
         glDeleteProgram(programId);
+        uniformLocations.clear();
     }
 
     public int getId() {
@@ -99,32 +121,32 @@ public class Shader {
      ---------------------------*/
 
     public void setUniform(String name, int value) {
-        int loc = glGetUniformLocation(programId, name);
+        int loc = uniformLocation(name);
         if (loc >= 0) glUniform1i(loc, value);
     }
 
     public void setUniform(String name, float value) {
-        int loc = glGetUniformLocation(programId, name);
+        int loc = uniformLocation(name);
         if (loc >= 0) glUniform1f(loc, value);
     }
 
     public void setUniform(String name, org.joml.Vector2f vec) {
-        int loc = glGetUniformLocation(programId, name);
+        int loc = uniformLocation(name);
         if (loc >= 0) glUniform2f(loc, vec.x, vec.y);
     }
 
     public void setUniform(String name, org.joml.Vector3f vec) {
-        int loc = glGetUniformLocation(programId, name);
+        int loc = uniformLocation(name);
         if (loc >= 0) glUniform3f(loc, vec.x, vec.y, vec.z);
     }
 
     public void setUniform(String name, org.joml.Vector4f vec) {
-        int loc = glGetUniformLocation(programId, name);
+        int loc = uniformLocation(name);
         if (loc >= 0) glUniform4f(loc, vec.x, vec.y, vec.z, vec.w);
     }
 
     public void setUniform(String name, org.joml.Matrix4f mat) {
-        int loc = glGetUniformLocation(programId, name);
+        int loc = uniformLocation(name);
         if (loc >= 0) {
             try (MemoryStack stack = MemoryStack.stackPush()) {
                 FloatBuffer fb = stack.mallocFloat(16);
@@ -138,13 +160,13 @@ public class Shader {
         try (MemoryStack stack = MemoryStack.stackPush()) {
             FloatBuffer fb = stack.mallocFloat(16);
             matrix.get(fb);
-            int loc = glGetUniformLocation(programId, name);
+            int loc = uniformLocation(name);
             if (loc != -1) glUniformMatrix4fv(loc, false, fb);
         }
     }
 
     public void setTexture(String name, int textureId, int unit) {
-        int loc = glGetUniformLocation(programId, name);
+        int loc = uniformLocation(name);
         if (loc != -1) {
             glActiveTexture(GL_TEXTURE0 + unit);
             glBindTexture(GL_TEXTURE_2D, textureId);
@@ -164,7 +186,7 @@ public class Shader {
         try (MemoryStack stack = MemoryStack.stackPush()) {
             FloatBuffer fb = stack.mallocFloat(16);
             for (int i = 0; i < matrices.length; i++) {
-                int loc = glGetUniformLocation(programId, name + "[" + i + "]");
+                int loc = uniformLocation(name + "[" + i + "]");
                 if (loc != -1) {
                     matrices[i].get(fb);
                     fb.rewind();
@@ -179,7 +201,7 @@ public class Shader {
      * The entire array is uploaded at once.
      */
     public void setUniformFloatArray(String name, float[] values) {
-        int loc = glGetUniformLocation(programId, name);
+        int loc = uniformLocation(name);
         if (loc != -1) {
             try (MemoryStack stack = MemoryStack.stackPush()) {
                 FloatBuffer fb = stack.mallocFloat(values.length);
@@ -193,7 +215,7 @@ public class Shader {
      * Bind a 2D texture array to a texture unit.
      */
     public void setTextureArray(String name, int textureArrayId, int unit) {
-        int loc = glGetUniformLocation(programId, name);
+        int loc = uniformLocation(name);
         if (loc != -1) {
             glActiveTexture(GL_TEXTURE0 + unit);
             glBindTexture(GL_TEXTURE_2D_ARRAY, textureArrayId);

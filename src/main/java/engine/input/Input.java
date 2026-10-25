@@ -21,6 +21,7 @@ public class Input {
     // Position et delta souris
     private double lastX, lastY, x, y;
     private double deltaX, deltaY;
+    private boolean mouseLookActive;
     // Buffer des caractères saisis
     private final List<Character> charBuffer = new ArrayList<>();
     private final boolean[] prevMouse = new boolean[GLFW_MOUSE_BUTTON_LAST];
@@ -65,10 +66,8 @@ public class Input {
         // Polling position souris
         double[] px = new double[1], py = new double[1];
         glfwGetCursorPos(window, px, py);
-        x = px[0]; y = py[0];
-        deltaX = x - lastX;
-        deltaY = y - lastY;
-        lastX = x; lastY = y;
+        sampleMousePosition(px[0], py[0], glfwGetInputMode(window, GLFW_CURSOR) == GLFW_CURSOR_DISABLED
+                && glfwGetWindowAttrib(window, GLFW_FOCUSED) == GLFW_TRUE);
 
         // Update mouse button states
         for (int b = 0; b < currMouse.length; b++) {
@@ -92,7 +91,25 @@ public class Input {
         }
     }
 
-    /** @return delta X de la souris depuis la dernière update */
+    /** Switch capture without applying cursor warps to the player's orientation. */
+    public void setCursorCaptured(boolean captured) {
+        int mode = captured ? GLFW_CURSOR_DISABLED : GLFW_CURSOR_NORMAL;
+        if (glfwGetInputMode(window, GLFW_CURSOR) == mode) return;
+        glfwSetInputMode(window, GLFW_CURSOR, mode);
+        deltaX = deltaY = 0;
+        mouseLookActive = false; // First sample after capture establishes a baseline, not a rotation.
+    }
+
+    // Package-visible for deterministic transition tests; UI coordinates update even while released.
+    void sampleMousePosition(double px, double py, boolean active) {
+        x = px; y = py;
+        deltaX = active && mouseLookActive ? x - lastX : 0;
+        deltaY = active && mouseLookActive ? y - lastY : 0;
+        lastX = x; lastY = y;
+        mouseLookActive = active;
+    }
+
+    /** @return look delta X; zero while released/unfocused and on the first captured sample. */
     public float getMouseDeltaX() { return (float) deltaX; }
     /** @return delta Y de la souris depuis la dernière update */
     public float getMouseDeltaY() { return (float) deltaY; }

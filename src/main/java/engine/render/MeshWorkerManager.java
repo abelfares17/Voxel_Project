@@ -63,31 +63,17 @@ public class MeshWorkerManager {
 
             glBindVertexArray(vao);
             glBindBuffer(GL_ARRAY_BUFFER, vbo);
-            glBufferData(GL_ARRAY_BUFFER, data.vertexBuffer, GL_STATIC_DRAW);
-
-            // location = 0 : aPos
-            glEnableVertexAttribArray(0);
-            glVertexAttribPointer(0, 3, GL_FLOAT, false, STRIDE, 0L);
-
-            // location = 1 : aTex
-            glEnableVertexAttribArray(1);
-            glVertexAttribPointer(1, 2, GL_FLOAT, false, STRIDE, (long)(3 * Float.BYTES));
-
-            // location = 2 : aNormal
-            glEnableVertexAttribArray(2);
-            glVertexAttribPointer(2, 3, GL_FLOAT, false, STRIDE, (long)((3 + 2) * Float.BYTES));
-
-            // location = 3 : aAO (CPU shadow removed - GPU shadow mapping only)
-            glEnableVertexAttribArray(3);
-            glVertexAttribPointer(3, 1, GL_FLOAT, false, STRIDE, (long)((3 + 2 + 3) * Float.BYTES));
+            MeshVertexLayout.upload(data);
 
             int ebo = MeshBuilder.uploadIndices(data);
             glBindVertexArray(0);
             glBindBuffer(GL_ARRAY_BUFFER, 0);
 
-            data.chunk.setMesh(vao, vbo, data.vertexCount, data.bounds, ebo, data.indexCount);
+            data.chunk.setMesh(vao, vbo, data.vertexCount, data.bounds, ebo, data.indexCount, data.vertexStride());
+            try {
+                if (data.shadowPositions != null) data.chunk.setShadowMesh(ShadowMesh.upload(data.shadowPositions));
+            } finally { data.free(); }
             //System.out.println("[MeshWorkerManager] Mesh uploaded and ready for chunk: " + data.chunk.getChunkX() + "," + data.chunk.getChunkZ());
-            data.free();
         }
     }
 
