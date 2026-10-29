@@ -8,7 +8,8 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 public class MeshData {
     public final FloatBuffer vertexBuffer;
-    public float[] shadowPositions;
+    public ShadowMesh.Data shadowData;
+    public long meshRevision;
     public final int vertexCount;
     public final Chunk chunk;
     public final MeshBounds bounds;
@@ -41,7 +42,7 @@ public class MeshData {
     }
 
     public void free() {
-        shadowPositions = null;
+        shadowData = null;
         if (packedVertices != null) org.lwjgl.system.MemoryUtil.memFree(packedVertices);
         if (indexBuffer != null) org.lwjgl.system.MemoryUtil.memFree(indexBuffer);
         if (vertexBuffer != null && vertexBuffer.isDirect()) {

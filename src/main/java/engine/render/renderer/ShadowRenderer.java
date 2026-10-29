@@ -412,6 +412,11 @@ public class ShadowRenderer implements Renderer {
         }
         // Geometry may have changed even with a paused sun and unchanged camera snap.
         dataA = candA;
+        boolean guardValid=true;
+        for(float texel:candA.texelSizes())guardValid &= engine.render.shadow.ShadowDistance.samplingGuardFits(texel);
+        context.setShadowCoverage(context.getShadowCoverage().withGuard(guardValid && casterCoverage));
+        if(Boolean.getBoolean("voxel.validateShadowCoverage") && !guardValid)
+            throw new IllegalStateException("CSM sampling footprint exceeds caster residency guard");
         renderShadowMapIntoAtlas(context, shadowAtlas, atlasOffsetA, dataA);
         renderedAThisFrame = true;
         lastSnapIxA = snapIndexX(candA);

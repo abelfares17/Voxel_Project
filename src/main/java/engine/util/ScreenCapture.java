@@ -1,6 +1,6 @@
 package engine.util;
 
-import org.lwjgl.BufferUtils;
+import org.lwjgl.system.MemoryUtil;
 
 import javax.imageio.ImageIO;
 import java.awt.image.BufferedImage;
@@ -12,6 +12,7 @@ import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 
 import static org.lwjgl.opengl.GL11.*;
+import static org.lwjgl.opengl.GL30.*;
 
 /**
  * Utility class for capturing screenshots from the OpenGL framebuffer.
@@ -30,7 +31,9 @@ public class ScreenCapture {
      * @return Path to the saved screenshot, or null if capture failed
      */
     public static Path capture(int width, int height) {
+        ByteBuffer buffer = null;
         try {
+            if (width <= 0 || height <= 0) throw new IllegalArgumentException("Empty framebuffer");
             // Ensure captures directory exists
             Files.createDirectories(CAPTURES_DIR);
 
@@ -46,8 +49,19 @@ public class ScreenCapture {
             }
 
             // Read pixels from OpenGL framebuffer
-            ByteBuffer buffer = BufferUtils.createByteBuffer(width * height * 4);
-            glReadPixels(0, 0, width, height, GL_RGBA, GL_UNSIGNED_BYTE, buffer);
+            buffer = MemoryUtil.memAlloc(Math.multiplyExact(Math.multiplyExact(width, height), 4));
+            int oldReadFbo = glGetInteger(GL_READ_FRAMEBUFFER_BINDING);
+            glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
+            int oldReadBuffer = glGetInteger(GL_READ_BUFFER);
+            try {
+                glReadBuffer(GL_BACK);
+                glReadPixels(0, 0, width, height, GL_RGBA, GL_UNSIGNED_BYTE, buffer);
+                int error = glGetError();
+                if (error != GL_NO_ERROR) throw new IOException("GL readback error: 0x" + Integer.toHexString(error));
+            } finally {
+                glReadBuffer(oldReadBuffer);
+                glBindFramebuffer(GL_READ_FRAMEBUFFER, oldReadFbo);
+            }
 
             // Convert to BufferedImage (OpenGL has origin at bottom-left, flip vertically)
             BufferedImage image = new BufferedImage(width, height, BufferedImage.TYPE_INT_ARGB);
@@ -65,13 +79,16 @@ public class ScreenCapture {
             }
 
             // Save as PNG
-            ImageIO.write(image, "PNG", outputPath.toFile());
+            if (!ImageIO.write(image, "PNG", outputPath.toFile()))
+                throw new IOException("No PNG writer available");
             System.out.println("Screenshot saved: " + outputPath.toAbsolutePath());
             return outputPath;
 
-        } catch (IOException e) {
+        } catch (IOException | IllegalArgumentException | ArithmeticException e) {
             System.err.println("Failed to save screenshot: " + e.getMessage());
             return null;
+        } finally {
+            if (buffer != null) MemoryUtil.memFree(buffer);
         }
     }
 }

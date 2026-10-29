@@ -395,7 +395,7 @@ public class CSMCalculator {
         float centerLS_X = sphereCenterWS.dot(lightRight);
         float centerLS_Y = sphereCenterWS.dot(lightUp);
 
-        // Snap to texel grid
+        // Snap to texel grid (essential to lock texels in world space when camera rotates/translates)
         int snapCellX = Math.round(centerLS_X / texelSize);
         int snapCellY = Math.round(centerLS_Y / texelSize);
         float snappedX = snapCellX * texelSize;
@@ -421,8 +421,16 @@ public class CSMCalculator {
         if (outSnapY != null) outSnapY[cascadeIndex] = snapCellY;
 
         // Compute Z range
-        float sphereCenterZ = sphereCenterWS.dot(lightDir);
-        float sphereRadius = sphereRadii[cascadeIndex];
+        float sphereCenterZ;
+        float sphereRadius;
+        if (RenderConfig.SHIMMER_FIX) {
+            // Anchor Z center on camera position (invariant to in-place camera yaw/pitch rotation)
+            sphereCenterZ = camPos.dot(lightDir);
+            sphereRadius = sphereRadii[cascadeIndex] + sphereCenterDistances[cascadeIndex];
+        } else {
+            sphereCenterZ = sphereCenterWS.dot(lightDir);
+            sphereRadius = sphereRadii[cascadeIndex];
+        }
 
         float minZ = sphereCenterZ - sphereRadius;
         float maxZ = sphereCenterZ + sphereRadius;
@@ -430,6 +438,11 @@ public class CSMCalculator {
         float casterMargin = (maxZ - minZ) * RenderConfig.CSM_DEPTH_MARGIN_RATIO;
         minZ -= casterMargin;
         maxZ += casterMargin;
+
+        if (RenderConfig.SHIMMER_FIX) {
+            minZ = (float) Math.floor(minZ / 16.0f) * 16.0f;
+            maxZ = (float) Math.ceil(maxZ / 16.0f) * 16.0f;
+        }
 
         // Handle frozen Z range
         if (freezeZRange) {

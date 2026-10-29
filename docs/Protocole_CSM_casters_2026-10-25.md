@@ -35,8 +35,9 @@ Lancer le jeu normal, **sans harnais**, lequel ignore les commandes manuelles. S
 
 | Touche | Effet |
 |---|---|
-| F2 | Capture d’écran |
-| F3 | Debug AO ON/OFF (de nouveau transmis au shader) |
+| F2 | Capture de la frame terminée dans captures/ ; confirmation 3 secondes après enregistrement, message d'échec sinon |
+| F3 | HUD en haut à gauche : monde, XYZ joueur, yaw/pitch en degrés ; ne modifie pas l'éclairage |
+| Maj+F3 | Debug AO ON/OFF |
 | F4 | Cycle des 8 modes shadow ci-dessous (de nouveau transmis au shader) |
 | **F5** | Couverture des casters corrigée / legacy ; notification à l’écran |
 | **F6** | Pause/reprise du soleil |

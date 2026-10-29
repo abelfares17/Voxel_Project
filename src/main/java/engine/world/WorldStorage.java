@@ -188,6 +188,18 @@ public class WorldStorage {
         }
     }
 
+    /** Same player.dat as loadPlayer, read-only; used to preload the actual saved location. */
+    public org.joml.Vector3f getSavedPlayerPosition() {
+        Path file=worldDir.resolve("player.dat");
+        if(!Files.exists(file))return null;
+        try(var in=new DataInputStream(Files.newInputStream(file))) {
+            float x=in.readFloat(),y=in.readFloat(),z=in.readFloat();
+            in.readFloat();in.readFloat(); // Reject truncated pose files just as loadPlayer does.
+            if(!Float.isFinite(x)||!Float.isFinite(y)||!Float.isFinite(z))return null;
+            return new org.joml.Vector3f(x,y,z);
+        } catch(IOException e) { return null; }
+    }
+
     /**
      * Save metadata to world.json.
      */

@@ -6,11 +6,15 @@ import org.joml.Vector3f;
 import static org.lwjgl.opengl.GL11.*;
 import static org.lwjgl.opengl.GL13.*;
 import static org.lwjgl.opengl.GL14.*;
+import static org.lwjgl.opengl.GL20.glVertexAttrib1f;
+import static org.lwjgl.opengl.GL20.glVertexAttrib2f;
+import static org.lwjgl.opengl.GL20.glVertexAttrib3f;
 import static org.lwjgl.opengl.GL30.*;
 
 import engine.core.config.GameConfig;
 import engine.core.config.RenderConfig;
 import engine.render.MeshBuilder;
+import engine.render.ShadowMesh;
 import engine.render.Shader;
 import engine.render.camera.Camera;
 import engine.render.camera.PerspectiveCamera;
@@ -47,6 +51,22 @@ public class VoxelRenderer implements Renderer {
 
     // Normal-offset shadow mode (0=off, 1=on)
     private int normalOffsetMode = 1;
+    private boolean wireframe = false;
+    private boolean shadowMeshWireframe = false;
+    private boolean shadowFade = RenderConfig.SHADOW_FADE;
+    public boolean isShadowFade() { return shadowFade; }
+    public void toggleShadowFade() { shadowFade=!shadowFade; }
+    public boolean isWireframe() { return wireframe; }
+    public boolean isShadowMeshWireframe() { return shadowMeshWireframe; }
+    public void toggleWireframe() {
+        wireframe = !wireframe;
+        if (!wireframe) shadowMeshWireframe = false;
+    }
+    public void toggleShadowMeshWireframe() {
+        shadowMeshWireframe = !shadowMeshWireframe;
+        wireframe = shadowMeshWireframe;
+    }
+    private final float[] shadowDepthWorldSpans = new float[RenderConfig.CSM_CASCADE_COUNT];
 
     private final Matrix4f chunkModelMatrix = new Matrix4f();
     private final Matrix4f projViewMatrix = new Matrix4f();
@@ -155,6 +175,14 @@ public class VoxelRenderer implements Renderer {
         voxelShader.setUniformFloatArray("shadowDepthBiasScales", shadowRenderer.getDepthBiasScales());
         voxelShader.setUniform("biasMode", biasMode);
         voxelShader.setUniform("normalOffsetMode", normalOffsetMode);
+        voxelShader.setUniform("greedyVisual", RenderConfig.GREEDY_VISUAL ? 1 : 0);
+        voxelShader.setUniform("shimmerFix", RenderConfig.SHIMMER_FIX ? 1 : 0);
+        voxelShader.setUniform("naturalTextures",
+                (RenderConfig.NATURAL_TEXTURES && !"legacy".equalsIgnoreCase(RenderConfig.TEXTURE_PACK)) ? 1 : 0);
+        var coverage=context.getShadowCoverage();
+        voxelShader.setUniform("shadowFadeEnabled",coverage.fadeEnabled()?1:0);
+        voxelShader.setUniform("shadowFadeStart",coverage.fadeStart());
+        voxelShader.setUniform("shadowFadeEnd",coverage.fadeEnd());
         voxelShader.setUniform("skipUnlitShadows", skipUnlit ? 1 : 0);
 
         // Temporal jitter
@@ -165,6 +193,9 @@ public class VoxelRenderer implements Renderer {
 
         voxelShader.setUniform("cascadeCount", cascadeData == null ? 0 : cascadeData.cascadeCount());
         if (cascadeData != null) {
+            for(int i=0;i<cascadeData.cascadeCount();i++)
+                shadowDepthWorldSpans[i]=engine.render.shadow.ShadowDistance.depthSpan(cascadeData.lightSpaceMatrices()[i]);
+            voxelShader.setUniformFloatArray("shadowDepthWorldSpans",shadowDepthWorldSpans);
             voxelShader.setUniformMat4Array("lightSpaceMatrices", cascadeData.lightSpaceMatrices());
             voxelShader.setUniformFloatArray("cascadeSplits", cascadeData.splitDistances());
             voxelShader.setUniformFloatArray("cascadeTexelSizes", cascadeData.texelSizes());
@@ -218,7 +249,32 @@ public class VoxelRenderer implements Renderer {
         // Mesh uploads happen before the shadow pass in Game.render, not between passes.
 
         // Render chunks
-        renderVisibleChunks(context, tightBounds);
+        if (wireframe) {
+            // Pass 1: Solid shaded clay fill with depth offset so underground caves are 100% occluded
+            voxelShader.setUniform("wireframePass", 1);
+            glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
+            glEnable(GL_POLYGON_OFFSET_FILL);
+            glPolygonOffset(1.0f, 1.0f);
+            renderVisibleChunks(context, tightBounds, false);
+            glDisable(GL_POLYGON_OFFSET_FILL);
+
+            // Pass 2: Crisp wireframe edge overlay on visible surfaces only
+            voxelShader.setUniform("wireframePass", shadowMeshWireframe ? 3 : 2);
+            glDepthFunc(GL_LEQUAL);
+            glDepthMask(false);
+            glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
+            try {
+                renderVisibleChunks(context, tightBounds, shadowMeshWireframe);
+            } finally {
+                glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
+                glDepthMask(true);
+                glDepthFunc(GL_LESS);
+                voxelShader.setUniform("wireframePass", 0);
+            }
+        } else {
+            voxelShader.setUniform("wireframePass", 0);
+            renderVisibleChunks(context, tightBounds, false);
+        }
         if (advanceFrame) frameIndex = (frameIndex + 1) % 8;
 
         voxelShader.unbind();
@@ -230,7 +286,7 @@ public class VoxelRenderer implements Renderer {
     public int getDrawCalls() { return drawCalls; }
     public long getDrawnVertices() { return drawnVertices; }
 
-    private void renderVisibleChunks(RenderContext context, boolean tightBounds) {
+    private void renderVisibleChunks(RenderContext context, boolean tightBounds, boolean useShadowMesh) {
         drawCalls = 0;
         drawnVertices = 0;
         Camera camera = context.getCamera();
@@ -271,10 +327,21 @@ public class VoxelRenderer implements Renderer {
 
                 chunkModelMatrix.translation(minX, 0, minZ);
                 voxelShader.setUniform("modelMatrix", chunkModelMatrix);
-                MeshBuilder.renderChunk(chunk);
-                if (chunk.getVao() > 0 && chunk.getVertexCount() > 0) {
+                if (useShadowMesh && chunk.getShadowMesh() != null && chunk.getShadowMesh().count > 0) {
+                    glVertexAttrib2f(1, 0.0f, 0.0f);
+                    glVertexAttrib3f(2, 0.0f, 1.0f, 0.0f);
+                    glVertexAttrib1f(3, 1.0f);
+                    ShadowMesh sm = chunk.getShadowMesh();
+                    sm.draw();
+                    glBindVertexArray(0);
                     drawCalls++;
-                    drawnVertices += chunk.getDrawCount();
+                    drawnVertices += sm.count;
+                } else {
+                    MeshBuilder.renderChunk(chunk);
+                    if (chunk.getVao() > 0 && chunk.getVertexCount() > 0) {
+                        drawCalls++;
+                        drawnVertices += chunk.getDrawCount();
+                    }
                 }
             }
         }

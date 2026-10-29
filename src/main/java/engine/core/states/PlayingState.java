@@ -237,6 +237,16 @@ public class PlayingState implements GameState {
                     + "," + System.getProperty("voxel.skyMode", "procedural")
                     + "," + renderContext.getCelestialState().activeLight()
                     + "," + renderContext.getCelestialState().activeElevation()
+                    + "," + RenderConfig.SHADOW_CASTER_RESIDENCY
+                    + "," + world.getChunkCount() + "," + world.getCasterRequested() + "," + world.getCasterReady()
+                    + "," + world.getCasterPlan().candidates() + "," + world.getCasterPlan().reach()
+                    + "," + world.getCasterPlan().reachLimited() + "," + world.getCasterPlan().budgetLimited()
+                    + "," + RenderConfig.LEGACY_CASTER_RESIDENCY
+                    + "," + renderContext.getShadowCoverage().fadeEnabled()
+                    + "," + renderContext.getShadowCoverage().fadeStart() + "," + renderContext.getShadowCoverage().fadeEnd()
+                    + "," + renderContext.getShadowCoverage().requiredReady() + "," + renderContext.getShadowCoverage().required()
+                    + "," + renderContext.getShadowCoverage().prefetchReady() + "," + renderContext.getShadowCoverage().prefetch()
+                    + "," + renderContext.getShadowCoverage().complete() + "," + renderContext.getShadowCoverage().guardValid()
             );
         }
     }

@@ -19,7 +19,64 @@ import static org.lwjgl.opengl.GL30.*;
  * Player management has been moved to Game.java.
  */
 public class World {
-    private final Map<ChunkPos, Chunk> chunks = new HashMap<>();
+    private final Map<ChunkPos, Chunk> chunks = new java.util.concurrent.ConcurrentHashMap<>();
+    private ShadowCasterResidency.Plan casterPlan = new ShadowCasterResidency.Plan(List.of(),0,0,false);
+    private Set<ChunkPos> casterChunks = Set.of();
+    private int plannedX=Integer.MIN_VALUE, plannedZ=Integer.MIN_VALUE, initialX, initialZ;
+    private engine.time.CelestialState.Light plannedLight;
+    private final Vector3f plannedDirection = new Vector3f();
+    private engine.time.CelestialState frameCelestial;
+    public engine.time.CelestialState getFrameCelestial() { return frameCelestial; }
+    public boolean usesCoherentResidency() {
+        return RenderConfig.SHADOW_CASTER_RESIDENCY && !RenderConfig.LEGACY_CASTER_RESIDENCY;
+    }
+    private int readyCount(Collection<ChunkPos> positions) {
+        int n=0;for(var p:positions){var c=chunks.get(p);if(c!=null&&c.isMeshCurrent())n++;}return n;
+    }
+    public engine.render.shadow.ShadowCoverage snapshotShadowCoverage(boolean fade) {
+        return new engine.render.shadow.ShadowCoverage(fade,RenderConfig.SHADOW_FADE_START,RenderConfig.SHADOW_FADE_END,
+                usesCoherentResidency(),readyCount(casterPlan.required()),casterPlan.required().size(),
+                readyCount(casterPlan.prefetch()),casterPlan.prefetch().size(),
+                allVisibleChunksReady(plannedX,plannedZ,renderDistance),true,casterPlan.budgetLimited());
+    }
+
+    public int getCasterRequested() { return casterChunks.size(); }
+    public int getCasterReady() {
+        return readyCount(casterChunks);
+    }
+    public ShadowCasterResidency.Plan getCasterPlan() { return casterPlan; }
+    private void planCasters(int cx,int cz) {
+        var sky=frameCelestial;var dir=usesCoherentResidency()?ShadowCasterResidency.residencyDirection(sky):sky.lightDirection();
+        // Coherent mode uses the exact direction of this frame. Do not spend its sampling
+        // guard on an unaccounted angular-cache error.
+        if(cx==plannedX&&cz==plannedZ&&sky.activeLight()==plannedLight
+                && (usesCoherentResidency()?dir.equals(plannedDirection):dir.distanceSquared(plannedDirection)<.000025f))return;
+        plannedX=cx;plannedZ=cz;plannedLight=sky.activeLight();plannedDirection.set(dir);
+        casterPlan=usesCoherentResidency()
+                ?ShadowCasterResidency.coherentPlan(cx,cz,renderDistance,sky,RenderConfig.SHADOW_FADE_END,RenderConfig.SHADOW_CASTER_BUDGET)
+                :ShadowCasterResidency.plan(cx,cz,renderDistance,sky,
+                    RenderConfig.SHADOW_CASTER_RESIDENCY?RenderConfig.SHADOW_CASTER_REACH:0,RenderConfig.SHADOW_CASTER_BUDGET);
+        casterChunks=new HashSet<>(casterPlan.extra());
+    }
+    private void loadCasters(int budget) {
+        int outside=0;
+        if(usesCoherentResidency())for(var p:chunks.keySet())
+            if(Math.abs(p.x()-plannedX)>renderDistance||Math.abs(p.z()-plannedZ)>renderDistance)outside++;
+        for(var pos:casterPlan.extra()) {
+            if(chunks.containsKey(pos))continue;
+            // A failed save can retain old chunks: do not exceed the budget by adding more.
+            if(usesCoherentResidency() && outside>=RenderConfig.SHADOW_CASTER_BUDGET)break;
+            addChunk(pos);
+            outside++;
+            if(--budget==0)break;
+        }
+    }
+    private void addChunk(ChunkPos pos) {
+        Chunk chunk=generateChunk(pos);chunks.put(pos,chunk);
+        meshManager.queueChunk(chunk);
+        // Also required for disk-loaded chunks: the previously exposed cut plane is now internal.
+        markNeighborsDirty(pos.x(),pos.z());
+    }
     private final long seed;
     private final WorldStorage storage;  // Replaced WorldSaver with WorldStorage
     private final int renderDistance;
@@ -50,6 +107,12 @@ public class World {
         this.seed = seed;
         this.storage = new WorldStorage(worldName, seed, mode.toString());
         if (!GameConfig.TEST_HARNESS_ENABLED) timeManager.restoreWorldDays(storage.getWorldDays());
+        frameCelestial=timeManager.celestialState();
+        if(usesCoherentResidency()) {
+            if(RenderConfig.SHADOW_FADE_END+engine.render.shadow.ShadowDistance.SAMPLING_GUARD>RenderConfig.SHADOW_CASTER_REACH)
+                throw new IllegalArgumentException("shadowCasterReach must cover shadowFadeEnd + sampling guard");
+            ShadowCasterResidency.validateOrbitBudget(renderDistance,RenderConfig.SHADOW_FADE_END,RenderConfig.SHADOW_CASTER_BUDGET);
+        }
         this.worldGenerator = new WorldGenerator(seed, this);
         this.meshManager = new MeshWorkerManager(this, Runtime.getRuntime().availableProcessors());
 
@@ -73,24 +136,9 @@ public class World {
      * @param centerChunkZ Center chunk Z coordinate
      */
     public void preloadInitialChunks(int centerChunkX, int centerChunkZ) {
-        // Generate all chunks in the grid
-        for (int dx = -renderDistance; dx <= renderDistance; dx++) {
-            for (int dz = -renderDistance; dz <= renderDistance; dz++) {
-                ChunkPos pos = new ChunkPos(centerChunkX + dx, centerChunkZ + dz);
-                if (!chunks.containsKey(pos)) {
-                    Chunk chunk = generateChunk(pos);
-                    chunks.put(pos, chunk);
-                    meshManager.queueChunk(chunk);
-                    markNeighborsDirty(pos.x(), pos.z());
-                }
-            }
-        }
-        System.out.println("All chunks generated");
-
-        // Wait for all meshes to be uploaded to GPU
-        while (!allVisibleChunksReady(centerChunkX, centerChunkZ, renderDistance)) {
-            meshManager.processMeshes();
-            meshManager.uploadMeshesIfAny();
+        startAsyncChunkGeneration(centerChunkX, centerChunkZ);
+        while (!isInitialLoadComplete()) {
+            processChunkLoading();
             try {
                 Thread.sleep(2);
             } catch (InterruptedException ignored) {}
@@ -109,7 +157,7 @@ public class World {
         for (int dx = -radius; dx <= radius; dx++) {
             for (int dz = -radius; dz <= radius; dz++) {
                 Chunk chunk = chunks.get(new ChunkPos(centerChunkX + dx, centerChunkZ + dz));
-                if (chunk == null || !chunk.isReady()) return false;
+                if (chunk == null || !chunk.isMeshCurrent()) return false;
             }
         }
         return true;
@@ -123,14 +171,14 @@ public class World {
      * @param centerChunkZ Center Z coordinate
      */
     public void startAsyncChunkGeneration(int centerChunkX, int centerChunkZ) {
+        initialX=centerChunkX;initialZ=centerChunkZ;
+        frameCelestial=timeManager.celestialState();
+        planCasters(centerChunkX,centerChunkZ);
         for (int dx = -renderDistance; dx <= renderDistance; dx++) {
             for (int dz = -renderDistance; dz <= renderDistance; dz++) {
                 ChunkPos pos = new ChunkPos(centerChunkX + dx, centerChunkZ + dz);
                 if (!chunks.containsKey(pos)) {
-                    Chunk chunk = generateChunk(pos);
-                    chunks.put(pos, chunk);
-                    meshManager.queueChunk(chunk);
-                    markNeighborsDirty(pos.x(), pos.z());
+                    addChunk(pos);
                 }
             }
         }
@@ -142,6 +190,7 @@ public class World {
      * Call this repeatedly until isInitialLoadComplete() returns true.
      */
     public void processChunkLoading() {
+        loadCasters(RenderConfig.SHADOW_CASTER_LOADS_PER_UPDATE);
         meshManager.processMeshes();
         meshManager.uploadMeshesIfAny();
     }
@@ -150,7 +199,7 @@ public class World {
      * Check if initial chunks are ready for rendering.
      */
     public boolean isInitialLoadComplete() {
-        return allVisibleChunksReady(0, 0, renderDistance);
+        return allVisibleChunksReady(initialX, initialZ, renderDistance) && getCasterReady()==getCasterRequested();
     }
 
     /**
@@ -162,18 +211,19 @@ public class World {
 
         for (int dx = -renderDistance; dx <= renderDistance; dx++) {
             for (int dz = -renderDistance; dz <= renderDistance; dz++) {
-                Chunk chunk = chunks.get(new ChunkPos(dx, dz));
-                if (chunk != null && chunk.isReady()) {
+                Chunk chunk = chunks.get(new ChunkPos(initialX+dx, initialZ+dz));
+                if (chunk != null && chunk.isMeshCurrent()) {
                     readyChunks++;
                 }
             }
         }
 
-        return (float) readyChunks / totalChunks;
+        return (float) (readyChunks+getCasterReady()) / (totalChunks+getCasterRequested());
     }
 
     public int getSpawnY(){
         Chunk chunk = chunks.get(new ChunkPos(0, 0));
+        if(chunk==null)throw new IllegalStateException("Origin must be loaded before choosing a new player's spawn");
         for (int y = Chunk.HEIGHT; y >= 0; y--) {
             if (chunk.getBlockId(0, y, 0) != 0){
                 return y;
@@ -227,6 +277,8 @@ public class World {
         if (chunk != null) {
             chunk.setBlock(localX, y, localZ, id);
             meshManager.queueChunk(chunk);
+            if(localX==0 || localX==Chunk.WIDTH-1 || localZ==0 || localZ==Chunk.DEPTH-1)
+                markNeighborsDirty(chunkX,chunkZ);
         }
     }
 
@@ -249,8 +301,6 @@ public class World {
         // Mark as needing save (newly generated)
         generated.setDataDirty(true);
 
-        // Ajout : Marquer les voisins pour remeshing
-        markNeighborsDirty(pos.x(), pos.z());
         return generated;
     }
 
@@ -298,8 +348,11 @@ public class World {
      * @param playerChunkZ Player chunk Z coordinate
      */
     public void update(int playerChunkX, int playerChunkZ) {
+        frameCelestial=timeManager.celestialState();
         updateVisibleChunks(playerChunkX, playerChunkZ, renderDistance);
-        unloadFarChunks(playerChunkX, playerChunkZ, renderDistance + 2);
+        planCasters(playerChunkX,playerChunkZ);
+        unloadFarChunks(playerChunkX, playerChunkZ, renderDistance + (usesCoherentResidency()?0:2));
+        loadCasters(RenderConfig.SHADOW_CASTER_LOADS_PER_UPDATE);
         meshManager.processMeshes();
     }
 
@@ -337,9 +390,7 @@ public class World {
             for (int dz = -radius; dz <= radius; dz++) {
                 ChunkPos pos = new ChunkPos(centerChunkX + dx, centerChunkZ + dz);
                 if (!chunks.containsKey(pos)) {
-                    Chunk chunk = generateChunk(pos);
-                    chunks.put(pos, chunk);
-                    meshManager.queueChunk(chunk);
+                    addChunk(pos);
                 }
             }
         }
@@ -353,16 +404,23 @@ public class World {
      * @param maxDistance  Maximum distance in chunks
      */
     private void unloadFarChunks(int centerChunkX, int centerChunkZ, int maxDistance) {
-        chunks.entrySet().removeIf(entry -> {
+        var removed=new ArrayList<ChunkPos>();
+        for(var entry:chunks.entrySet()) {
             ChunkPos pos = entry.getKey();
             int dx = Math.abs(pos.x() - centerChunkX);
             int dz = Math.abs(pos.z() - centerChunkZ);
-            boolean toRemove = dx > maxDistance || dz > maxDistance;
+            boolean toRemove = (dx > maxDistance || dz > maxDistance) && !casterChunks.contains(pos);
             if (toRemove) {
-                entry.getValue().cleanup();
+                Chunk chunk=entry.getValue();
+                if(chunk.isDataDirty() && !GameConfig.TEST_HARNESS_ENABLED) {
+                    try { storage.saveChunk(chunk); }
+                    catch(java.io.IOException e) { System.err.println("Cannot unload unsaved chunk "+pos+": "+e);continue; }
+                }
+                chunks.remove(pos,chunk);chunk.retire();chunk.cleanup();removed.add(pos);
             }
-            return toRemove;
-        });
+        }
+        // A retired neighbor is air again; rebuild the boundary, not just its old shadow mesh.
+        for(var pos:removed)markNeighborsDirty(pos.x(),pos.z());
     }
 
     public void renderDepth(Shader depthShader) {
@@ -502,6 +560,7 @@ public class World {
 
         // Détruire tous les meshes GPU des chunks actifs
         for (Chunk chunk : chunks.values()) {
+            chunk.retire();
             chunk.cleanup();
         }
         chunks.clear();

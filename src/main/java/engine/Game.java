@@ -18,6 +18,7 @@ import static org.lwjgl.glfw.GLFW.GLFW_KEY_F7;
 import static org.lwjgl.glfw.GLFW.GLFW_KEY_F8;
 import static org.lwjgl.glfw.GLFW.GLFW_KEY_F9;
 import static org.lwjgl.glfw.GLFW.GLFW_KEY_L;
+import static org.lwjgl.glfw.GLFW.GLFW_KEY_M;
 import static org.lwjgl.glfw.GLFW.GLFW_KEY_P;
 import static org.lwjgl.glfw.GLFW.GLFW_MOUSE_BUTTON_LEFT;
 import static org.lwjgl.glfw.GLFW.glfwSetInputMode;
@@ -56,6 +57,8 @@ public class Game {
     private final CameraCullingValidator cameraCullingValidator = new CameraCullingValidator();
 
     private final TextRenderer textRenderer;
+    private boolean debugHudVisible;
+    private boolean screenshotRequested;
 
     private long lastTime;
     private int winWidth;
@@ -76,9 +79,11 @@ public class Game {
 
         this.physicsEngine = new PhysicsEngine();
 
-        // Spawn position (test harness overrides this later)
-        float spawnY = world.getSpawnY() + 2f;
-        this.player = new Player(0.5f, spawnY, 0.5f, physicsEngine);
+        // LoadingState preloads this location; do not query the unloaded origin for a saved player.
+        Vector3f savedPosition = GameConfig.TEST_HARNESS_ENABLED ? GameConfig.TEST_FORCE_SPAWN_POS
+                : world.getStorage().getSavedPlayerPosition();
+        Vector3f spawn = savedPosition != null ? savedPosition : new Vector3f(0.5f, world.getSpawnY() + 2f, 0.5f);
+        this.player = new Player(spawn.x, spawn.y, spawn.z, physicsEngine);
 
         // Load player position from save (unless in test harness mode)
         if (!GameConfig.TEST_HARNESS_ENABLED) {
@@ -139,7 +144,8 @@ public class Game {
             player.update(currentChunk, input);
         }
 
-        world.update(playerChunkX, playerChunkZ);
+        chunkCoords = player.getChunkCoords(GameConfig.CHUNK_WIDTH, GameConfig.CHUNK_DEPTH);
+        world.update(chunkCoords[0], chunkCoords[1]);
 
         // The harness owns the pose and controls; real mouse/key input must not alter a run.
         if (GameConfig.TEST_HARNESS_ENABLED) return;
@@ -151,18 +157,25 @@ public class Game {
 
         // Screenshot (F2)
         if (input.isKeyJustPressed(GLFW_KEY_F2)) {
-            ScreenCapture.capture(winWidth, winHeight);
-            showDebugNotification("Screenshot Saved");
+            screenshotRequested = true;
         }
 
-        // Toggle AO debug (F3)
+        // F3 is a pose HUD, without changing the image being diagnosed. Shift+F3 retains AO.
         if (input.isKeyJustPressed(GLFW_KEY_F3)) {
-            voxelRenderer.toggleDebugAO();
-            showDebugNotification(voxelRenderer.isDebugAO() ? "AO Debug: ON" : "AO Debug: OFF");
+            if (input.crouch) {
+                voxelRenderer.toggleDebugAO();
+                showDebugNotification(voxelRenderer.isDebugAO() ? "AO Debug: ON" : "AO Debug: OFF");
+            } else {
+                debugHudVisible = !debugHudVisible;
+            }
         }
 
         // Cycle shadow debug mode (F4)
         if (input.isKeyJustPressed(GLFW_KEY_F4)) {
+            if(input.crouch) {
+                voxelRenderer.toggleShadowFade();
+                showDebugNotification("Shadow distance fade: "+(voxelRenderer.isShadowFade()?"ON":"OFF"));
+            } else {
             voxelRenderer.cycleShadowDebug();
             String[] modes = {
                 "Shadow Debug: OFF",
@@ -175,6 +188,7 @@ public class Game {
                 "Shadow Debug: Lit Before Fog"
             };
             showDebugNotification(modes[voxelRenderer.getDebugShadow()]);
+            }
         }
 
         if (input.isKeyJustPressed(org.lwjgl.glfw.GLFW.GLFW_KEY_F5)) {
@@ -189,11 +203,16 @@ public class Game {
             showDebugNotification(world.getTimeManager().isPaused() ? "Time Pause: ON" : "Time Pause: OFF");
         }
 
-        // Cycle PCF mode info (F7)
+        // Toggle wireframe mode (F7), Shift+F7 for greedy shadow mesh wireframe
         if (input.isKeyJustPressed(GLFW_KEY_F7)) {
-            voxelRenderer.cycleForceCascade();
-            String[] modes = {"Cascade: Normal", "Cascade: Force 0", "Cascade: Force 1", "Cascade: Force 2"};
-            showDebugNotification(modes[voxelRenderer.getForceCascade() + 1]);
+            if (input.crouch) {
+                voxelRenderer.toggleShadowMeshWireframe();
+                showDebugNotification(voxelRenderer.isShadowMeshWireframe()
+                        ? "Wireframe: Greedy Shadow Mesh" : "Wireframe: OFF");
+            } else {
+                voxelRenderer.toggleWireframe();
+                showDebugNotification(voxelRenderer.isWireframe() ? "Wireframe: ON" : "Wireframe: OFF");
+            }
         }
 
         // Cycle forced cascade (F8)
@@ -244,6 +263,18 @@ public class Game {
             shadowRenderer.toggleBlendMode();
             showDebugNotification(shadowRenderer.isDitherBlend() ? "Blend: DITHER" : "Blend: LINEAR");
         }
+
+        // Toggle wireframe mode (M), Shift+M for greedy shadow mesh wireframe
+        if (input.isKeyJustPressed(GLFW_KEY_M)) {
+            if (input.crouch) {
+                voxelRenderer.toggleShadowMeshWireframe();
+                showDebugNotification(voxelRenderer.isShadowMeshWireframe()
+                        ? "Wireframe: Greedy Shadow Mesh" : "Wireframe: OFF");
+            } else {
+                voxelRenderer.toggleWireframe();
+                showDebugNotification(voxelRenderer.isWireframe() ? "Wireframe: ON" : "Wireframe: OFF");
+            }
+        }
     }
 
     public void render(RenderContext context, GpuPassTimer gpuTimer) {
@@ -256,7 +287,8 @@ public class Game {
         // Cache time-dependent values for frame consistency
         float timeOfDay = world.getTimeManager().getTimeOfDay();
         context.setTimeOfDay(timeOfDay);
-        context.setCelestialState(world.getTimeManager().celestialState());
+        context.setCelestialState(world.getFrameCelestial());
+        context.setShadowCoverage(world.snapshotShadowCoverage(voxelRenderer.isShadowFade()));
         context.setDayNightPeriodSec(world.getTimeManager().getDayNightPeriodSec());
 
         if (gpuTimer != null) gpuTimer.beginFrame(context);
@@ -299,6 +331,16 @@ public class Game {
             gpuTimer.endFrame(world.getDepthDrawCalls(), world.getDepthVertices(),
                     voxelRenderer.getDrawCalls(), voxelRenderer.getDrawnVertices());
         }
+        // Read the completed back buffer (including F3 HUD), BEFORE Application swaps it.
+        if (screenshotRequested) {
+            screenshotRequested = false;
+            captureScreenshot();
+        }
+    }
+
+    private void captureScreenshot() {
+        var path = ScreenCapture.capture(winWidth, winHeight);
+        showDebugNotification(path != null ? "Screenshot saved" : "Screenshot failed (see console)");
     }
 
     private void showDebugNotification(String message) {
@@ -309,33 +351,58 @@ public class Game {
     private void renderUI(RenderContext context) {
         Matrix4f ortho = new Matrix4f().ortho2D(0, winWidth, winHeight, 0);
 
-        float t = context.getTimeOfDay();
-        int totalMinutes = (int) (t * 24 * 60);
-        totalMinutes = totalMinutes % (24 * 60);
-        int hour = totalMinutes / 60;
-        int minute = totalMinutes % 60;
-        String heureStr = String.format(java.util.Locale.ROOT, "%02d:%02d  %s %.1f deg", hour, minute,
-                context.getCelestialState().activeLight(), context.getCelestialState().activeElevation());
-
         float textScale = 2.0f;
-        textRenderer.drawText(
-                heureStr, 20, winHeight - 100,
-                new Vector3f(1, 1, 0.85f),
-                ortho, winHeight, textScale
-        );
+        if (debugHudVisible) {
+            float t = context.getTimeOfDay();
+            int totalMinutes = (int) (t * 24 * 60);
+            totalMinutes = totalMinutes % (24 * 60);
+            int hour = totalMinutes / 60;
+            int minute = totalMinutes % 60;
+            String heureStr = String.format(java.util.Locale.ROOT, "%02d:%02d  %s %.1f deg", hour, minute,
+                    context.getCelestialState().activeLight(), context.getCelestialState().activeElevation());
 
-        String fpsStr = String.format("FPS: %d", context.getFpsReal());
-        textRenderer.drawText(
-                fpsStr, 20, winHeight - 140,
-                new Vector3f(0.9f, 1f, 0.9f),
-                ortho, winHeight, textScale
-        );
+            Vector3f pos = player.getPosition();
+            String[] lines = {
+                "World: " + world.getWorldName(),
+                String.format(java.util.Locale.ROOT, "XYZ: %.3f / %.3f / %.3f", pos.x, pos.y, pos.z),
+                String.format(java.util.Locale.ROOT, "Yaw: %.3f deg  Pitch: %.3f deg", player.getYaw(), player.getPitch()),
+                String.format(java.util.Locale.ROOT, "Casters: %d/%d extra  Reach: %.0f  %s%s",
+                        world.getCasterReady(),world.getCasterRequested(),world.getCasterPlan().reach(),
+                        world.getCasterPlan().reachLimited()?"RANGE LIMIT ":"",
+                        world.getCasterPlan().budgetLimited()?"BUDGET LIMIT":""),
+                String.format(java.util.Locale.ROOT,"Fade: %s %.0f..%.0f  Coverage: %s",
+                        context.getShadowCoverage().fadeEnabled()?"ON":"OFF",
+                        context.getShadowCoverage().fadeStart(),context.getShadowCoverage().fadeEnd(),
+                        context.getShadowCoverage().complete()?"COMPLETE":"DEGRADED"),
+                String.format(java.util.Locale.ROOT,"Required: %d/%d  Prefetch: %d/%d",
+                        context.getShadowCoverage().requiredReady(),context.getShadowCoverage().required(),
+                        context.getShadowCoverage().prefetchReady(),context.getShadowCoverage().prefetch())
+            };
+            for (int i = 0; i < lines.length; i++) {
+                float y = 48 + i * 48;
+                textRenderer.drawText(lines[i], 22, y + 2, new Vector3f(0), ortho, winHeight, textScale);
+                textRenderer.drawText(lines[i], 20, y, new Vector3f(1), ortho, winHeight, textScale);
+            }
+
+            textRenderer.drawText(
+                    heureStr, 20, winHeight - 100,
+                    new Vector3f(1, 1, 0.85f),
+                    ortho, winHeight, textScale
+            );
+
+            String fpsStr = String.format("FPS: %d", context.getFpsReal());
+            textRenderer.drawText(
+                    fpsStr, 20, winHeight - 140,
+                    new Vector3f(0.9f, 1f, 0.9f),
+                    ortho, winHeight, textScale
+            );
+        }
 
         // Display debug notification if active
         if (debugNotificationText != null && System.currentTimeMillis() < debugNotificationEndTime) {
             float textWidth = debugNotificationText.length() * 10 * textScale;
             float centerX = (winWidth - textWidth) / 2;
-            float bottomY = 80;
+            float bottomY = winHeight - 40;
 
             textRenderer.drawText(
                     debugNotificationText, centerX, bottomY,

@@ -30,8 +30,11 @@ public final class ShadowCasterVolume {
 
     /** Returns old-depth-span/new-depth-span to preserve the existing world-space bias. */
     public float apply(Matrix4f destination) {
-        float scale = 2f/(1f-near);
-        float offset = -(1f+near)/(1f-near);
+        float effectiveNear = engine.core.config.RenderConfig.SHIMMER_FIX
+                ? (float) (Math.floor(near * 8.0f) / 8.0f)
+                : near;
+        float scale = 2f/(1f-effectiveNear);
+        float offset = -(1f+effectiveNear)/(1f-effectiveNear);
         destination.set(receiver);
         destination.m02(receiver.m02()*scale);
         destination.m12(receiver.m12()*scale);

@@ -14,6 +14,29 @@ import org.joml.Vector3f;
 public class RenderConfig {
     /** Position-only merged shadow geometry; false retains the reference visual-mesh path. */
     public static final boolean GREEDY_SHADOWS = Boolean.parseBoolean(System.getProperty("voxel.greedyShadows", "true"));
+    /** Greedy merging of coplanar visual chunk quads with repeating atlas sub-tile UVs. */
+    public static final boolean GREEDY_VISUAL = Boolean.parseBoolean(System.getProperty("voxel.greedyVisual", "true"));
+    /** Continuous CSM projection & 4-tap bilinear 3x3 tent filter to eliminate solar rotation shimmering. */
+    public static final boolean SHIMMER_FIX = Boolean.parseBoolean(System.getProperty("voxel.shimmerFix", "true"));
+    /** Texture pack mode: "modern" stitches per-face 16x16 PNGs from textures/blocks/, "legacy" uses raw atlas.png. */
+    public static final String TEXTURE_PACK = System.getProperty("voxel.texturePack", "modern");
+    /** Anti-repetition natural textures (per-block UV rotation/flip, 4 tile variants, and macro-noise tint). */
+    public static final boolean NATURAL_TEXTURES = Boolean.parseBoolean(System.getProperty("voxel.naturalTextures", "true"));
+    public static final boolean SHADOW_CASTER_RESIDENCY = Boolean.parseBoolean(System.getProperty("voxel.shadowCasterResidency", "true"));
+    /** Legacy is a benchmark reference, not the coherent distance-limited policy. */
+    public static final boolean LEGACY_CASTER_RESIDENCY = Boolean.getBoolean("voxel.legacyCasterResidency");
+    public static final boolean SHADOW_FADE = Boolean.parseBoolean(System.getProperty("voxel.shadowFade", "true"));
+    public static final float SHADOW_FADE_START = Float.parseFloat(System.getProperty("voxel.shadowFadeStart", "160"));
+    public static final float SHADOW_FADE_END = Float.parseFloat(System.getProperty("voxel.shadowFadeEnd", "256"));
+    static {
+        if (!Float.isFinite(SHADOW_FADE_START) || !Float.isFinite(SHADOW_FADE_END)
+                || SHADOW_FADE_START < 0 || SHADOW_FADE_START >= SHADOW_FADE_END)
+            throw new IllegalArgumentException("shadowFade requires finite 0 <= start < end");
+    }
+    /** Additional lightward reach beyond the visible square; bounded, not infinite shadow coverage. */
+    public static final float SHADOW_CASTER_REACH = Math.max(0, Math.min(1024, Float.parseFloat(System.getProperty("voxel.shadowCasterReach", "320"))));
+    public static final int SHADOW_CASTER_BUDGET = Math.max(0, Math.min(2048, Integer.getInteger("voxel.shadowCasterBudget", 1024)));
+    public static final int SHADOW_CASTER_LOADS_PER_UPDATE = Math.max(1, Math.min(32, Integer.getInteger("voxel.shadowCasterLoadsPerUpdate", 4)));
     public static final boolean SKIP_UNLIT_SHADOWS = Boolean.parseBoolean(System.getProperty("voxel.skipUnlitShadows", "false"));
     public static final boolean COMPACT_VERTICES = Boolean.parseBoolean(System.getProperty("voxel.compactVertices", "true"));
     /** Per-mesh uint32 indices; override false for the non-indexed benchmark reference. */

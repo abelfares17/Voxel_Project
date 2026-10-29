@@ -118,6 +118,10 @@ uniform int pcfMode;
 uniform int forceCascade;
 uniform int biasMode;
 uniform float shadowDepthBiasScales[MAX_CASCADES];
+uniform float shadowDepthWorldSpans[MAX_CASCADES]; // AFTER caster fit, [0,1] depth -> blocks
+uniform int shadowFadeEnabled;
+uniform float shadowFadeStart;
+uniform float shadowFadeEnd;
 
 // Temporal jitter for shadow anti-aliasing
 uniform int frameIndex;  // Increments each frame (0-7 cycle)
@@ -339,6 +343,14 @@ float sampleShadowWorldStable(int cascade, vec3 worldPos, vec2 shadowUV, float r
  * Single sample shadow from the atlas at a given layer offset.
  * Used during leapfrog transitions to reduce GPU cost of 2x shadow sampling.
  */
+float shadowTapVisibility(int cascade, float receiverDepth, float depth, float compareDepth) {
+    if (depth >= compareDepth) return 1.0;
+    if (shadowFadeEnabled == 0) return 0.0;
+    // Bias affects the comparison only. Never change the distance when testing zero bias.
+    float distanceBlocks = max(0.0, receiverDepth - depth) * shadowDepthWorldSpans[cascade];
+    return smoothstep(shadowFadeStart, shadowFadeEnd, distanceBlocks);
+}
+
 float sampleShadowSingleFromArray(int layerOffset, int cascade,
                                    vec3 projCoords, float bias) {
     // Out-of-bounds check - return fully lit
@@ -350,7 +362,7 @@ float sampleShadowSingleFromArray(int layerOffset, int cascade,
 
     float compareDepth = projCoords.z - bias;
     float depth = texture(shadowAtlas, vec3(projCoords.xy, float(layerOffset + cascade))).r;
-    return (depth < compareDepth) ? 0.0 : 1.0;
+    return shadowTapVisibility(cascade, projCoords.z, depth, compareDepth);
 }
 
 /**
@@ -359,7 +371,7 @@ float sampleShadowSingleFromArray(int layerOffset, int cascade,
  * This guarantees a mathematically continuous shadow gradient across texel boundaries,
  * eliminating the stepped stair-jumps and edge shimmering caused by sun movement.
  */
-float sampleBilinearShadow(float layer, vec2 uv, float compareDepth) {
+float sampleBilinearShadow(int cascade, float layer, vec2 uv, float receiverDepth, float compareDepth) {
     float mapSize = 1.0 / shadowMapInvSize;
     vec2 pos = uv * mapSize - vec2(0.5);
     vec2 base = floor(pos);
@@ -376,10 +388,10 @@ float sampleBilinearShadow(float layer, vec2 uv, float compareDepth) {
     float d01 = texture(shadowAtlas, vec3(uv01, layer)).r;
     float d11 = texture(shadowAtlas, vec3(uv11, layer)).r;
 
-    float s00 = (d00 < compareDepth) ? 0.0 : 1.0;
-    float s10 = (d10 < compareDepth) ? 0.0 : 1.0;
-    float s01 = (d01 < compareDepth) ? 0.0 : 1.0;
-    float s11 = (d11 < compareDepth) ? 0.0 : 1.0;
+    float s00 = shadowTapVisibility(cascade, receiverDepth, d00, compareDepth);
+    float s10 = shadowTapVisibility(cascade, receiverDepth, d10, compareDepth);
+    float s01 = shadowTapVisibility(cascade, receiverDepth, d01, compareDepth);
+    float s11 = shadowTapVisibility(cascade, receiverDepth, d11, compareDepth);
 
     return mix(mix(s00, s10, f.x), mix(s01, s11, f.x), f.y);
 }
@@ -408,21 +420,21 @@ float sampleShadowPCFFromArray(
     #if SHADOW_FILTER_MODE == 0
         // Single sample
         float depth = texture(shadowAtlas, vec3(projCoords.xy, layer)).r;
-        return depth < compareDepth ? 0.0 : 1.0;
+        return shadowTapVisibility(cascade, projCoords.z, depth, compareDepth);
 
     #elif SHADOW_FILTER_MODE == 1
         // Single 2x2 bilinear sample (fastest smooth filter)
-        return sampleBilinearShadow(layer, projCoords.xy, compareDepth);
+        return sampleBilinearShadow(cascade, layer, projCoords.xy, projCoords.z, compareDepth);
 
     #else
         // 4-tap box bilinear PCF: samples 4 bilinear centers offset by +/- 0.5 texels.
         // Covers a 3x3 footprint of 9 texels with continuous tent weighting.
         // Provides soft, anti-aliased penumbra with zero cell-rotation noise and zero shimmer.
         vec2 texel = vec2(shadowMapInvSize);
-        float s0 = sampleBilinearShadow(layer, projCoords.xy + vec2(-0.5, -0.5) * texel, compareDepth);
-        float s1 = sampleBilinearShadow(layer, projCoords.xy + vec2( 0.5, -0.5) * texel, compareDepth);
-        float s2 = sampleBilinearShadow(layer, projCoords.xy + vec2(-0.5,  0.5) * texel, compareDepth);
-        float s3 = sampleBilinearShadow(layer, projCoords.xy + vec2( 0.5,  0.5) * texel, compareDepth);
+        float s0 = sampleBilinearShadow(cascade, layer, projCoords.xy + vec2(-0.5, -0.5) * texel, projCoords.z, compareDepth);
+        float s1 = sampleBilinearShadow(cascade, layer, projCoords.xy + vec2( 0.5, -0.5) * texel, projCoords.z, compareDepth);
+        float s2 = sampleBilinearShadow(cascade, layer, projCoords.xy + vec2(-0.5,  0.5) * texel, projCoords.z, compareDepth);
+        float s3 = sampleBilinearShadow(cascade, layer, projCoords.xy + vec2( 0.5,  0.5) * texel, projCoords.z, compareDepth);
         return (s0 + s1 + s2 + s3) * 0.25;
 
     #endif

@@ -43,6 +43,9 @@
 
 in vec3 vNormal;
 in vec2 vTexCoord;
+flat in vec2 vTileOrigin;
+flat in vec2 vQuadSize;
+flat in int vPackedAO;
 in vec3 vWorldPos;
 in float vAO;
 
@@ -118,6 +121,14 @@ uniform int pcfMode;
 uniform int forceCascade;
 uniform int biasMode;
 uniform float shadowDepthBiasScales[MAX_CASCADES];
+uniform float shadowDepthWorldSpans[MAX_CASCADES]; // AFTER caster fit, [0,1] depth -> blocks
+uniform int shadowFadeEnabled;
+uniform float shadowFadeStart;
+uniform float shadowFadeEnd;
+uniform int greedyVisual;
+uniform int shimmerFix;
+uniform int naturalTextures;
+uniform int wireframePass; // 0=normal, 1=solid clay base for wireframe, 2=visual mesh lines, 3=shadow mesh lines
 
 // Temporal jitter for shadow anti-aliasing
 uniform int frameIndex;  // Increments each frame (0-7 cycle)
@@ -339,6 +350,14 @@ float sampleShadowWorldStable(int cascade, vec3 worldPos, vec2 shadowUV, float r
  * Single sample shadow from the atlas at a given layer offset.
  * Used during leapfrog transitions to reduce GPU cost of 2x shadow sampling.
  */
+float shadowTapVisibility(int cascade, float receiverDepth, float depth, float compareDepth) {
+    if (depth >= compareDepth) return 1.0;
+    if (shadowFadeEnabled == 0) return 0.0;
+    // Bias affects the comparison only. Never change the distance when testing zero bias.
+    float distanceBlocks = max(0.0, receiverDepth - depth) * shadowDepthWorldSpans[cascade];
+    return smoothstep(shadowFadeStart, shadowFadeEnd, distanceBlocks);
+}
+
 float sampleShadowSingleFromArray(int layerOffset, int cascade,
                                    vec3 projCoords, float bias) {
     // Out-of-bounds check - return fully lit
@@ -350,7 +369,7 @@ float sampleShadowSingleFromArray(int layerOffset, int cascade,
 
     float compareDepth = projCoords.z - bias;
     float depth = texture(shadowAtlas, vec3(projCoords.xy, float(layerOffset + cascade))).r;
-    return (depth < compareDepth) ? 0.0 : 1.0;
+    return shadowTapVisibility(cascade, projCoords.z, depth, compareDepth);
 }
 
 /**
@@ -359,7 +378,7 @@ float sampleShadowSingleFromArray(int layerOffset, int cascade,
  * This guarantees a mathematically continuous shadow gradient across texel boundaries,
  * eliminating the stepped stair-jumps and edge shimmering caused by sun movement.
  */
-float sampleBilinearShadow(float layer, vec2 uv, float compareDepth) {
+float sampleBilinearShadow(int cascade, float layer, vec2 uv, float receiverDepth, float compareDepth) {
     float mapSize = 1.0 / shadowMapInvSize;
     vec2 pos = uv * mapSize - vec2(0.5);
     vec2 base = floor(pos);
@@ -376,10 +395,10 @@ float sampleBilinearShadow(float layer, vec2 uv, float compareDepth) {
     float d01 = texture(shadowAtlas, vec3(uv01, layer)).r;
     float d11 = texture(shadowAtlas, vec3(uv11, layer)).r;
 
-    float s00 = (d00 < compareDepth) ? 0.0 : 1.0;
-    float s10 = (d10 < compareDepth) ? 0.0 : 1.0;
-    float s01 = (d01 < compareDepth) ? 0.0 : 1.0;
-    float s11 = (d11 < compareDepth) ? 0.0 : 1.0;
+    float s00 = shadowTapVisibility(cascade, receiverDepth, d00, compareDepth);
+    float s10 = shadowTapVisibility(cascade, receiverDepth, d10, compareDepth);
+    float s01 = shadowTapVisibility(cascade, receiverDepth, d01, compareDepth);
+    float s11 = shadowTapVisibility(cascade, receiverDepth, d11, compareDepth);
 
     return mix(mix(s00, s10, f.x), mix(s01, s11, f.x), f.y);
 }
@@ -408,21 +427,30 @@ float sampleShadowPCFFromArray(
     #if SHADOW_FILTER_MODE == 0
         // Single sample
         float depth = texture(shadowAtlas, vec3(projCoords.xy, layer)).r;
-        return depth < compareDepth ? 0.0 : 1.0;
+        return shadowTapVisibility(cascade, projCoords.z, depth, compareDepth);
 
     #elif SHADOW_FILTER_MODE == 1
-        // Single 2x2 bilinear sample (fastest smooth filter)
-        return sampleBilinearShadow(layer, projCoords.xy, compareDepth);
+        if (shimmerFix == 1) {
+            // 4-tap box bilinear PCF (3x3 texel continuous tent filter)
+            vec2 texel = vec2(shadowMapInvSize);
+            float s0 = sampleBilinearShadow(cascade, layer, projCoords.xy + vec2(-0.5, -0.5) * texel, projCoords.z, compareDepth);
+            float s1 = sampleBilinearShadow(cascade, layer, projCoords.xy + vec2( 0.5, -0.5) * texel, projCoords.z, compareDepth);
+            float s2 = sampleBilinearShadow(cascade, layer, projCoords.xy + vec2(-0.5,  0.5) * texel, projCoords.z, compareDepth);
+            float s3 = sampleBilinearShadow(cascade, layer, projCoords.xy + vec2( 0.5,  0.5) * texel, projCoords.z, compareDepth);
+            return (s0 + s1 + s2 + s3) * 0.25;
+        }
+        // Single 2x2 bilinear sample (legacy filter)
+        return sampleBilinearShadow(cascade, layer, projCoords.xy, projCoords.z, compareDepth);
 
     #else
         // 4-tap box bilinear PCF: samples 4 bilinear centers offset by +/- 0.5 texels.
         // Covers a 3x3 footprint of 9 texels with continuous tent weighting.
         // Provides soft, anti-aliased penumbra with zero cell-rotation noise and zero shimmer.
         vec2 texel = vec2(shadowMapInvSize);
-        float s0 = sampleBilinearShadow(layer, projCoords.xy + vec2(-0.5, -0.5) * texel, compareDepth);
-        float s1 = sampleBilinearShadow(layer, projCoords.xy + vec2( 0.5, -0.5) * texel, compareDepth);
-        float s2 = sampleBilinearShadow(layer, projCoords.xy + vec2(-0.5,  0.5) * texel, compareDepth);
-        float s3 = sampleBilinearShadow(layer, projCoords.xy + vec2( 0.5,  0.5) * texel, compareDepth);
+        float s0 = sampleBilinearShadow(cascade, layer, projCoords.xy + vec2(-0.5, -0.5) * texel, projCoords.z, compareDepth);
+        float s1 = sampleBilinearShadow(cascade, layer, projCoords.xy + vec2( 0.5, -0.5) * texel, projCoords.z, compareDepth);
+        float s2 = sampleBilinearShadow(cascade, layer, projCoords.xy + vec2(-0.5,  0.5) * texel, projCoords.z, compareDepth);
+        float s3 = sampleBilinearShadow(cascade, layer, projCoords.xy + vec2( 0.5,  0.5) * texel, projCoords.z, compareDepth);
         return (s0 + s1 + s2 + s3) * 0.25;
 
     #endif
@@ -444,9 +472,9 @@ float sampleCascadeBlendedA(int cascade, vec3 normal, vec3 lightDir, vec3 worldP
     if (cascade < cascadeCount - 1) {
         float splitDist = cascadeSplits[cascade + 1];
         float distToSplit = splitDist - viewDepth;
-        const float BLEND_BAND = 4.0;
-        if (distToSplit < BLEND_BAND && distToSplit >= 0.0) {
-            float blendFactor = smoothstep(0.0, 1.0, 1.0 - (distToSplit / BLEND_BAND));
+        float blendBand = (shimmerFix == 1) ? max(4.0, splitDist * 0.15) : 4.0;
+        if (distToSplit < blendBand && distToSplit >= 0.0) {
+            float blendFactor = smoothstep(0.0, 1.0, 1.0 - (distToSplit / blendBand));
             int nextCascade = cascade + 1;
             vec4 lspNext = vLightSpacePos[nextCascade];
             vec3 pcNext = lspNext.xyz / lspNext.w;
@@ -626,9 +654,140 @@ float calculateShadow(vec3 normal, vec3 lightDir, vec3 worldPos, float viewDepth
 // MAIN
 // ═══════════════════════════════════════════════════════════════════════════════
 
+int hashBlock3D(ivec3 p) {
+    int n = p.x * 73856093 ^ p.y * 19349663 ^ p.z * 83492791;
+    n = (n ^ (n >> 13)) * 1274126177;
+    return n ^ (n >> 16);
+}
+
+float valueNoise2D(vec2 p) {
+    ivec2 i = ivec2(floor(p));
+    vec2 f = fract(p);
+    vec2 u = f * f * (3.0 - 2.0 * f);
+    float a = hashCell(i);
+    float b = hashCell(i + ivec2(1, 0));
+    float c = hashCell(i + ivec2(0, 1));
+    float d = hashCell(i + ivec2(1, 1));
+    return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
+}
+
+float evaluateAO() {
+    if (vPackedAO == 0) {
+        return clamp(vAO, 0.0, 1.0);
+    }
+    // Option 1: 9-point Boundary-Clamped AO evaluation (pure ALU, 0 texture fetches)
+    float c00  = float( vPackedAO        & 3) * (1.0 / 3.0);
+    float c10  = float((vPackedAO >>  2) & 3) * (1.0 / 3.0);
+    float c11  = float((vPackedAO >>  4) & 3) * (1.0 / 3.0);
+    float c01  = float((vPackedAO >>  6) & 3) * (1.0 / 3.0);
+    float ev0  = float((vPackedAO >>  8) & 3) * (1.0 / 3.0);
+    float ev1  = float((vPackedAO >> 10) & 3) * (1.0 / 3.0);
+    float eu0  = float((vPackedAO >> 12) & 3) * (1.0 / 3.0);
+    float eu1  = float((vPackedAO >> 14) & 3) * (1.0 / 3.0);
+    float aInt = float((vPackedAO >> 16) & 3) * (1.0 / 3.0);
+
+    float u = clamp(vTexCoord.x, 0.0, vQuadSize.x);
+    float v = clamp(vTexCoord.y, 0.0, vQuadSize.y);
+
+    // 1-block-clamped boundary weights along U and V
+    float wu0 = clamp(1.0 - u, 0.0, 1.0);
+    float wu1 = clamp(u - (vQuadSize.x - 1.0), 0.0, 1.0);
+    float wuM = max(0.0, 1.0 - wu0 - wu1);
+
+    float wv0 = clamp(1.0 - v, 0.0, 1.0);
+    float wv1 = clamp(v - (vQuadSize.y - 1.0), 0.0, 1.0);
+    float wvM = max(0.0, 1.0 - wv0 - wv1);
+
+    float row0 = wu0 * c00 + wuM * ev0  + wu1 * c10;
+    float rowM = wu0 * eu0 + wuM * aInt + wu1 * eu1;
+    float row1 = wu0 * c01 + wuM * ev1  + wu1 * c11;
+
+    return clamp(wv0 * row0 + wvM * rowM + wv1 * row1, 0.0, 1.0);
+}
+
+vec2 resolveAtlasUV(vec3 normal) {
+    vec2 tileOrigin = vTileOrigin;
+    vec2 localUV;
+    if (greedyVisual == 1) {
+        vec2 clampedCoord = (vPackedAO != 0)
+                ? clamp(vTexCoord, vec2(0.0005), vQuadSize - vec2(0.0005))
+                : max(vTexCoord, vec2(0.0));
+        localUV = clamp(fract(clampedCoord), 0.002, 0.998);
+    } else {
+        tileOrigin = floor(vTexCoord * 64.0 + 0.0001) / 64.0;
+        localUV = clamp((vTexCoord - tileOrigin) * 64.0, 0.002, 0.998);
+    }
+
+    if (naturalTextures == 1) {
+        ivec3 blockPos = ivec3(floor(vWorldPos - normal * 0.02));
+        int h = hashBlock3D(blockPos);
+
+        // 1. Select 1 of 4 CTM random variants stored at (col + variant, row)
+        int variant = h & 3;
+        tileOrigin.x += float(variant) / 64.0;
+
+        // 2. Stochastic UV rotation & mirror per block
+        if (abs(normal.y) > 0.5) {
+            // Horizontal faces (grass_top, dirt, bedrock): full 8-way square symmetry
+            int rot = (h >> 2) & 3;
+            if (rot == 1)      localUV = vec2(1.0 - localUV.y, localUV.x);
+            else if (rot == 2) localUV = vec2(1.0 - localUV.x, 1.0 - localUV.y);
+            else if (rot == 3) localUV = vec2(localUV.y, 1.0 - localUV.x);
+            if (((h >> 4) & 1) != 0) localUV.x = 1.0 - localUV.x;
+        } else {
+            // Vertical faces (grass_side, stone, dirt side): preserve vertical gravity, random horizontal flip
+            if (((h >> 2) & 1) != 0) localUV.x = 1.0 - localUV.x;
+        }
+        localUV = clamp(localUV, 0.002, 0.998);
+    }
+
+    return tileOrigin + localUV / 64.0;
+}
+
+vec3 applyNaturalMacroTint(vec3 albedo, vec3 normal) {
+    if (naturalTextures == 0) return albedo;
+    // Smooth low-frequency biome/meadow macro-variation in world XZ + geological Y strata
+    float macro = valueNoise2D(vWorldPos.xz * 0.045) * 0.65 + valueNoise2D(vWorldPos.xz * 0.14) * 0.35;
+    float strata = sin(vWorldPos.y * 0.55 + macro * 2.5) * 0.5 + 0.5;
+    bool isFoliage = (albedo.g > albedo.r * 1.06 && albedo.g > albedo.b * 1.25);
+    if (isFoliage) {
+        // Subtle shift between warm sun-baked olive meadow and cool mossy green
+        vec3 warmMeadow = vec3(1.06, 1.03, 0.92);
+        vec3 coolMoss   = vec3(0.93, 0.98, 1.04);
+        return albedo * mix(coolMoss, warmMeadow, macro);
+    } else if (abs(normal.y) < 0.5) {
+        // Subtle geological strata modulation on vertical rock/earth faces
+        return albedo * mix(0.95, 1.05, strata);
+    }
+    return albedo * mix(0.96, 1.04, macro);
+}
+
 void main() {
     vec3 N = normalize(vNormal);
     vec3 L = normalize(lightDirection);  // points TO the active sun/moon
+
+    float fragAO = evaluateAO();
+
+    // Solid-shaded hidden-line wireframe mode (F7 / Shift+F7)
+    if (wireframePass == 2) {
+        fragColor = vec4(0.06, 0.09, 0.12, 1.0); // Crisp dark slate edges for visual mesh
+        return;
+    } else if (wireframePass == 3) {
+        fragColor = vec4(0.05, 0.85, 0.95, 1.0); // High-contrast cyan edges for greedy shadow mesh
+        return;
+    } else if (wireframePass == 1) {
+        // Matte clay surface shaded by face orientation + AO so geometry is crystal-clear and caves are hidden
+        float aoFactor = mix(0.55, 1.0, pow(fragAO, 1.5));
+        float dirShade = (abs(N.y) > 0.5) ? (N.y > 0.0 ? 0.96 : 0.55)
+                       : (abs(N.x) > 0.5 ? 0.80 : 0.70);
+        vec3 clayBase = vec3(0.76, 0.78, 0.82) * dirShade * aoFactor;
+        float dist = length(cameraPos - vWorldPos);
+        float fogFactor = clamp((fogEnd - dist) / (fogEnd - fogStart), 0.0, 1.0);
+        fragColor = mix(vec4(fogColor, 1.0), vec4(clayBase, 1.0), fogFactor);
+        return;
+    }
+
+    vec2 atlasUV = resolveAtlasUV(N);
 
     int cascade = selectCascade(vViewDepth);
 
@@ -644,7 +803,7 @@ void main() {
         } else if (debugShadow == 2) {
             // Mode 2: Cascade colors (blended with albedo)
             vec3 cascadeColor = CASCADE_COLORS[cascade];
-            vec3 albedo = texture(textureSampler, vTexCoord).rgb;
+            vec3 albedo = applyNaturalMacroTint(texture(textureSampler, atlasUV).rgb, N);
             fragColor = vec4(mix(albedo, cascadeColor, 0.5), 1.0);
             return;
         } else if (debugShadow == 3) {
@@ -706,13 +865,13 @@ void main() {
         } else if (debugShadow == 7) {
             // Mode 7: Lit color BEFORE fog application
             // Isolates whether flash comes from lighting or fog amplification
-            vec3 albedo = texture(textureSampler, vTexCoord).rgb * 0.8;
+            vec3 albedo = applyNaturalMacroTint(texture(textureSampler, atlasUV).rgb, N) * 0.8;
             float diff_lighting = max(dot(N, L), 0.0);
             float shadow = calculateShadow(N, L, vWorldPos, vViewDepth);
 
             float aoMinVal = aoMin > 0.0 ? aoMin : 0.5;
             float aoPowerVal = aoPower > 0.0 ? aoPower : 2.0;
-            float aoRemapped = pow(vAO, aoPowerVal);
+            float aoRemapped = pow(fragAO, aoPowerVal);
             float aoFactor = mix(aoMinVal, 1.0, aoRemapped);
 
             float hemisphereBlend = N.y * 0.5 + 0.5;
@@ -793,7 +952,7 @@ void main() {
         return;
     #endif
 
-    vec3 albedo = texture(textureSampler, vTexCoord).rgb * 0.8;
+    vec3 albedo = applyNaturalMacroTint(texture(textureSampler, atlasUV).rgb, N) * 0.8;
     float diff = max(dot(N, L), 0.0);
 
     #if PERF_BISECT_STAGE == 1
@@ -810,7 +969,7 @@ void main() {
         // + AO only
         float aoMinVal = aoMin > 0.0 ? aoMin : 0.5;
         float aoPowerVal = aoPower > 0.0 ? aoPower : 2.0;
-        float aoRemapped = pow(vAO, aoPowerVal);
+        float aoRemapped = pow(fragAO, aoPowerVal);
         float aoFactor = mix(aoMinVal, 1.0, aoRemapped);
 
         vec3 color = albedo * (ambient * aoFactor + lightColor * diff);
@@ -835,7 +994,7 @@ void main() {
         // AO
         float aoMinVal = aoMin > 0.0 ? aoMin : 0.5;
         float aoPowerVal = aoPower > 0.0 ? aoPower : 2.0;
-        float aoRemapped = pow(vAO, aoPowerVal);
+        float aoRemapped = pow(fragAO, aoPowerVal);
         float aoFactor = mix(aoMinVal, 1.0, aoRemapped);
 
         // Hemisphere ambient

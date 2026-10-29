@@ -28,6 +28,15 @@ public class Chunk {
 
     // true si le mesh doit être reconstruit avant d'être rendu
     private volatile boolean meshDirty = true;
+    private final java.util.concurrent.atomic.AtomicLong meshRevision = new java.util.concurrent.atomic.AtomicLong();
+    private volatile boolean retired;
+    private volatile long installedMeshRevision=-1;
+    public long requestMeshRevision() { return meshRevision.incrementAndGet(); }
+    public long getMeshRevision() { return meshRevision.get(); }
+    public boolean isRetired() { return retired; }
+    public boolean isMeshCurrent() { return !retired && !meshDirty && installedMeshRevision==meshRevision.get(); }
+    /** Permanent removal from the world, distinct from replacing its GPU mesh. */
+    public void retire() { retired = true; meshRevision.incrementAndGet(); }
 
     // true si les données du chunk ont été modifiées et doivent être sauvegardées
     private volatile boolean dataDirty = false;
@@ -164,6 +173,7 @@ public class Chunk {
         this.vertexCount = vertexCount;
         this.meshBounds = vertexCount > 0 ? bounds : null;
         this.meshDirty = false;
+        this.installedMeshRevision = meshRevision.get();
         //System.out.println("setMesh: vao=" + vao + " vbo=" + vbo + " count=" + vertexCount);
     }
 
@@ -183,7 +193,7 @@ public class Chunk {
     public int getIndexCount() { return indexCount; }
     public int getDrawCount() { return ebo == 0 ? vertexCount : indexCount; }
     public long getMeshBytes() { return (long) vertexCount * vertexStride + (long) indexCount * Integer.BYTES
-            + (shadowMesh == null ? 0 : (long) shadowMesh.count * 12); }
+            + (shadowMesh == null ? 0 : shadowMesh.getMeshBytes()); }
 
     private engine.render.ShadowMesh shadowMesh;
     public engine.render.ShadowMesh getShadowMesh() { return shadowMesh; }

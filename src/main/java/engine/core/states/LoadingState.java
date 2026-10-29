@@ -157,7 +157,10 @@ public class LoadingState implements GameState {
         }
 
         // Start async chunk generation
-        world.startAsyncChunkGeneration(0, 0);
+        var saved=GameConfig.TEST_HARNESS_ENABLED?GameConfig.TEST_FORCE_SPAWN_POS:world.getStorage().getSavedPlayerPosition();
+        int cx=saved==null?0:(int)Math.floor(saved.x/GameConfig.CHUNK_WIDTH);
+        int cz=saved==null?0:(int)Math.floor(saved.z/GameConfig.CHUNK_DEPTH);
+        world.startAsyncChunkGeneration(cx, cz);
         phase = LoadingPhase.GENERATING_CHUNKS;
     }
 

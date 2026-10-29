@@ -56,7 +56,7 @@ public final class GpuPassTimer implements AutoCloseable {
         Files.createDirectories(path.getParent());
         writer = new PrintWriter(Files.newBufferedWriter(path));
         writer.println("frameIndex,elapsed_s,fb_width,fb_height,time_of_day,pos_x,pos_y,pos_z,shadow_frustum_culling,tight_shadow_bounds,tight_camera_bounds,indexed_meshes,compact_vertices,skip_unlit_shadows,greedy_shadows,"
-                + "sky_mode,active_light,light_elevation,time_scale,paused,start_hour,shadow_draws,shadow_vertices,voxel_draws,voxel_vertices,"
+                + "sky_mode,active_light,light_elevation,time_scale,paused,start_hour,shadow_fade,legacy_caster_residency,shadow_draws,shadow_vertices,voxel_draws,voxel_vertices,"
                 + "gpu_shadow_ms,gpu_sky_sun_ms,gpu_voxel_ms,gpu_ui_ms,gpu_scene_ms");
         for (int i = 0; i < slots.length; i++) {
             slots[i] = new Slot();
@@ -92,7 +92,8 @@ public final class GpuPassTimer implements AutoCloseable {
                 + "," + context.getCelestialState().activeElevation()
                 + "," + context.getWorld().getTimeManager().getDebugSpeedMultiplier()
                 + "," + context.getWorld().getTimeManager().isPaused()
-                + "," + System.getProperty("voxel.startHour", "saved/default");
+                + "," + System.getProperty("voxel.startHour", "saved/default")
+                + "," + context.getShadowCoverage().fadeEnabled() + "," + RenderConfig.LEGACY_CASTER_RESIDENCY;
     }
 
     public void beginPass(Pass pass) {

@@ -162,6 +162,101 @@ TOB_Voxel_Project/
 
    On Windows, use `gradlew.bat` instead of `./gradlew`.
 
+### 🚀 Command-Line Launch Guide & JVM Flags (`-Dvoxel.*`)
+
+#### Recommended Ways to Pass Flags
+
+1. **Directly via `./gradlew run` (Recommended — always keeps `-XstartOnFirstThread` on macOS and works with warm Gradle daemons):**
+   ```bash
+   ./gradlew run -Dvoxel.startHour=17.3 -Dvoxel.timeScale=60 -Dvoxel.skyMode=procedural
+   ```
+
+2. **Via `JAVA_OPTS` or `VOXEL_OPTS` with `./gradlew run`:**
+   *(Note: `build.gradle` automatically preserves `-XstartOnFirstThread` when parsing `JAVA_OPTS` / `VOXEL_OPTS`)*
+   ```bash
+   JAVA_OPTS="-Dvoxel.startHour=17.3 -Dvoxel.timeScale=60 -Dvoxel.skyMode=procedural" ./gradlew run
+   ```
+
+3. **Via the compiled distribution binary (`installDist` — fastest startup, ideal for benchmarks):**
+   *(Note: When running the generated `build/install/TOB_Voxel_Project/bin/TOB_Voxel_Project` script with `JAVA_OPTS` on macOS, or `java -jar`, include `-XstartOnFirstThread` if your shell overrides default JVM args)*
+   ```bash
+   ./gradlew --offline installDist
+   JAVA_OPTS="-Dvoxel.startHour=14.5 -Dvoxel.timeScale=90" ./build/install/TOB_Voxel_Project/bin/TOB_Voxel_Project
+   ```
+
+*(If `JAVA_HOME` is not set to Java 17 in your shell on macOS Homebrew, prefix the command with `JAVA_HOME=/opt/homebrew/Cellar/openjdk@17/17.0.15/libexec/openjdk.jdk/Contents/Home`).*
+
+---
+
+#### Complete Reference of `-Dvoxel.*` System Properties
+
+##### 🌅 Time, Sun/Moon Orbit & Skybox (`TimeManager`, `CelestialState`, `SkyRenderer`)
+| Flag | Default | Values | Description |
+| :--- | :---: | :---: | :--- |
+| `-Dvoxel.startHour` | *(saved / `14.0`)* | `0.0` .. `24.0` | Overrides the starting hour of the day (`6.0` = sunrise, `12.0` = solar noon, `17.5` = sunset, `0.0` = midnight). |
+| `-Dvoxel.timeScale` | `1.0` | `>= 0.0` | Multiplies the day/night cycle speed (`60` = 60× faster, `0` = frozen time). |
+| `-Dvoxel.pauseTime` | `false` | `true` / `false` | Starts the game with the solar/lunar cycle paused (can also be toggled in-game with `F6`). |
+| `-Dvoxel.skyMode` | `procedural` | `procedural` / `legacy` | `procedural` enables the fullfullscreen ray-reconstructed sky dome (twilight scattering, solar/lunar discs, and 512 deterministic stars). |
+
+##### 🧱 Meshing & Vertex Pipeline (`RenderConfig`, `MeshBuilder`, `ShadowMesh`)
+| Flag | Default | Values | Description |
+| :--- | :---: | :---: | :--- |
+| `-Dvoxel.texturePack` | `modern` | `modern` / `legacy` | `modern` loads individual harmonized 16×16 PNGs per block face from `src/main/resources/textures/blocks/*.png` (`grass_top`, `grass_side`, `dirt`, `stone`, `bedrock`); `legacy` uses the original `atlas.png`. |
+| `-Dvoxel.naturalTextures` | `true` | `true` / `false` | Enables stochastic per-block UV rotation/mirroring, 4 CTM random variants per block, undulating grass side fringes, and low-frequency biome/strata macro-tinting in the fragment shader. |
+| `-Dvoxel.greedyVisual` | `true` | `true` / `false` | Enables 2D Greedy Meshing on visual chunks with repeating intra-tile atlas UVs and preserved per-vertex AO gradients (`+21.5%` FPS, `-185 MB` VRAM). Set `false` for legacy 1×1 unit quads. |
+| `-Dvoxel.greedyShadows` | `true` | `true` / `false` | Enables position-only 2D Greedy Meshing with unit-edge ear-clipping triangulation (no T-junction depth cracks) for the shadow depth pass. |
+| `-Dvoxel.indexedMeshes` | `true` | `true` / `false` | Uses indexed `GL_UNSIGNED_INT` EBOs (4 vertices / 6 indices per quad) instead of non-indexed `glDrawArrays` (6 vertices per quad). |
+| `-Dvoxel.compactVertices` | `true` | `true` / `false` | Packs visual chunk vertices into a 24-byte layout (`ushort3 pos + byte3 normal + float2 UV + float AO`) instead of 36-byte floats. |
+| `-Dvoxel.tightCameraBounds` | `false` | `true` / `false` | Tests exact occupied vertical AABB bounds of each chunk against the camera frustum. |
+| `-Dvoxel.tightShadowBounds` | `false` | `true` / `false` | Tests exact occupied vertical AABB bounds of each chunk against the cascade light frustum. |
+
+##### ☀️ Cascaded Shadow Mapping (CSM) & Anti-Shimmering (`RenderConfig`, `CSMCalculator`, `ShadowRenderer`)
+| Flag | Default | Values | Description |
+| :--- | :---: | :---: | :--- |
+| `-Dvoxel.shimmerFix` | `true` | `true` / `false` | Enables continuous 4-tap bilinear $3\times 3$ tent PCF filtering, wider inter-cascade blend bands (`15%`), and rotation-invariant quantized Z bounds. Set `false` for legacy 1-tap bilinear PCF. |
+| `-Dvoxel.shadowFrustumCulling` | `true` | `true` / `false` | Rejects chunks outside each cascade's orthographic light frustum during the shadow pass. |
+| `-Dvoxel.shadowCasterResidency` | `true` | `true` / `false` | Keeps upstream solar shadow-caster chunks resident in memory (lightweight `ShadowMesh`-only residency) so distant mountains cast coherent low-angle shadows. |
+| `-Dvoxel.legacyCasterResidency` | `false` | `true` / `false` | Uses the older non-coherent caster residency policy (for A/B benchmarking only). |
+| `-Dvoxel.shadowCasterReach` | `320` | `0` .. `1024` | Maximum upstream lightward reach (in blocks) for shadow-caster chunk residency. |
+| `-Dvoxel.shadowCasterBudget` | `1024` | `0` .. `2048` | Maximum number of extra shadow-caster chunks kept resident beyond the visible render distance. |
+| `-Dvoxel.shadowCasterLoadsPerUpdate` | `4` | `1` .. `32` | Maximum upstream shadow-caster chunks generated per world update tick. |
+| `-Dvoxel.shadowFade` | `true` | `true` / `false` | Smoothly fades out shadows cast by obstacles beyond `[shadowFadeStart .. shadowFadeEnd]` blocks along the light ray (can also be toggled in-game with `Shift+F4`). |
+| `-Dvoxel.shadowFadeStart` | `160` | `>= 0` | Ray distance (in blocks) where distant caster shadows begin to fade. |
+| `-Dvoxel.shadowFadeEnd` | `256` | `> start` | Ray distance (in blocks) where distant caster shadows are completely faded out. |
+| `-Dvoxel.skipUnlitShadows` | `false` | `true` / `false` | Skips shadow-map sampling in the fragment shader for back-facing surfaces (`dot(N, L) <= 0`). |
+
+##### 🧪 Automated Benchmarking & Diagnostics (`GameConfig`, `TestHarness`, `GpuPassTimer`)
+| Flag | Default | Values | Description |
+| :--- | :---: | :---: | :--- |
+| `-Dvoxel.testHarness` | `false` | `true` / `false` | Bypasses the main menu, loads `World 10` at a deterministic spawn pose, runs a 20-second automated camera/movement timeline, and writes frame metrics to `logs/perf_test_*.csv`. |
+| `-Ddiagnostic.windowScale` | `0.75` | `0.25` .. `1.0` | Scales the initial window dimensions relative to the primary monitor workarea. |
+| `-Dvoxel.cacheUniforms` | `false` | `true` / `false` | Caches OpenGL uniform locations in `Shader.java` instead of querying `glGetUniformLocation`. |
+
+---
+
+#### 🎬 Ready-to-Run Preset Commands (Portfolio Captures & Benchmarks)
+
+- **Clip 1 — Sunset, Twilight Scattering & Starfield Skybox:**
+  ```bash
+  ./gradlew run -Dvoxel.startHour=17.3 -Dvoxel.timeScale=60 -Dvoxel.skyMode=procedural
+  ```
+- **Clip 2 — Accelerated CSM Shadow Sweep Across Valleys:**
+  ```bash
+  ./gradlew run -Dvoxel.startHour=14.5 -Dvoxel.timeScale=90 -Dvoxel.shadowFade=true
+  ```
+- **Clip 3 — Pipeline Debug Views & Greedy Meshing Wireframe (`F4`, `F7`, `Shift+F7`, `Shift+F3`):**
+  ```bash
+  ./gradlew run -Dvoxel.startHour=15.5 -Dvoxel.timeScale=20 -Dvoxel.skyMode=procedural
+  ```
+- **Compare New Engine vs Legacy Mode (Visual & Performance A/B):**
+  ```bash
+  # Default (Greedy Visual Meshing + Shimmer Fix ON)
+  ./gradlew run -Dvoxel.greedyVisual=true -Dvoxel.shimmerFix=true
+
+  # Legacy (Unmerged 1x1 Visual Quads + Legacy 1-tap Bilinear Shadow Filter)
+  ./gradlew run -Dvoxel.greedyVisual=false -Dvoxel.shimmerFix=false
+  ```
+
 ### Building a Standalone JAR
 
 ```bash
@@ -173,16 +268,37 @@ The JAR will be in `build/libs/`. Run it with:
 java -XstartOnFirstThread -jar build/libs/TOB_Voxel_Project-1.0-SNAPSHOT.jar
 ```
 
-**Note**: The `-XstartOnFirstThread` flag is required for macOS.
+**Note**: The `-XstartOnFirstThread` flag is required for macOS when invoking `java` directly.
 
 ## 🎮 Controls
 
-### In-Game
+### In-Game Movement
 - **W/A/S/D** - Move forward/left/backward/right
-- **Space** - Jump / Fly up (in flight mode)
-- **Shift** - Crouch / Fly down (in flight mode)
-- **Mouse** - Look around
-- **ESC** - Pause / Return to menu
+- **Space** - Jump / Fly up (in spectator mode)
+- **Shift** - Crouch / Fly down (in spectator mode)
+- **P** - Toggle Spectator (free-flight) mode
+- **Mouse** - Look around (`Left Click` to capture cursor, `ESC` to release cursor)
+
+### Debug & Rendering Pipeline Keys
+| Key | Action |
+| :--- | :--- |
+| **`F2`** | Capture screenshot to `screenshots/` |
+| **`F3`** | Toggle full Debug HUD (coordinates, yaw/pitch, caster residency, shadow coverage, time, solar angle, and FPS). Screen is 100% clean when `F3` is off. |
+| **`Shift + F3`** | Toggle Vertex Ambient Occlusion (`AO Debug`) isolation view |
+| **`F4`** | Cycle Shader Debug modes: `OFF` → `Shadow Factor` → `Cascade Colors` → `World-Cell Hash` → `Fog Factor` → `Cascade SOLID` → `A/B Diff` → `Lit Before Fog` |
+| **`Shift + F4`** | Toggle ray-distance Shadow Fade (`160..256` blocks) |
+| **`F5`** | Toggle directional CSM Shadow Caster Coverage (`corrected` vs `legacy`) |
+| **`F6`** | Pause / Resume solar & lunar time progression |
+| **`F7`** | Toggle **Visual Mesh Wireframe** (`GL_LINE` — shows greedy-merged visual quads) |
+| **`Shift + F7`** | Toggle **Greedy Shadow Mesh Wireframe** (shows merged shadow-pass polygons & ear-clipping triangulation) |
+| **`F8`** | Cycle forced CSM Cascade isolation (`Normal` → `Force 0` → `Force 1` → `Force 2`) |
+| **`F9`** | Cycle Shadow Bias mode (`Normal` → `Constant` → `Zero` → `Doubled`) |
+| **`F10`** | Toggle Vertex Normal-Offset Shadow Bias (`ON` / `OFF`) |
+| **`F11`** | Freeze / Unfreeze Pixar/Duff Light Basis vectors |
+| **`F12`** | Freeze / Unfreeze CSM Texel-Snapped XY projection center |
+| **`Shift + F12`** | Freeze / Unfreeze CSM Orthographic Z depth range |
+| **`L`** | Toggle experimental Leapfrog shadow crossfade mode |
+| **`B`** | Toggle Leapfrog blend mode (`DITHER` vs `LINEAR`) |
 
 ### Menu Navigation
 - **Mouse** - Hover and click buttons

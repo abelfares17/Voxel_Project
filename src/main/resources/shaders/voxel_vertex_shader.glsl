@@ -21,8 +21,12 @@ uniform vec3 lightDirection;  // Direction TO the active sun/moon (normal offset
 uniform float cascadeTexelSizes[MAX_CASCADES];  // For scaling normal offset per cascade
 uniform float cascadeTexelSizesB[MAX_CASCADES]; // Secondary texel sizes (for leapfrog)
 uniform int normalOffsetMode;  // 0=off, 1=on (for A/B testing)
+uniform int greedyVisual;      // 1=decode repeating atlas tile UVs, 0=legacy direct UVs
 
 out vec2 vTexCoord;
+flat out vec2 vTileOrigin;
+flat out vec2 vQuadSize;
+flat out int vPackedAO;
 out vec3 vNormal;
 out vec3 vWorldPos;
 out float vAO;
@@ -97,6 +101,31 @@ void main() {
     }
 
     gl_Position = projectionMatrix * viewPos;
-    vTexCoord = aTex;
-    vAO = aAO;
+    if (aAO >= 2.0) {
+        int rawU = int(aTex.x + 0.5);
+        int rawV = int(aTex.y + 0.5);
+        int uCorner = rawU & 511;
+        int vCorner = rawV & 511;
+        int tileU = (rawU >> 9) & 63;
+        int tileV = (rawV >> 9) & 63;
+        int quadW = max(rawU >> 15, 1);
+        int quadH = max(rawV >> 15, 1);
+        vTileOrigin = vec2(float(tileU), float(tileV)) / 64.0;
+        vQuadSize = vec2(float(quadW), float(quadH));
+        vTexCoord = vec2(float(uCorner), float(vCorner));
+        vPackedAO = int(aAO + 0.5);
+        vAO = 1.0;
+    } else {
+        vPackedAO = 0;
+        vQuadSize = vec2(512.0);
+        vAO = aAO;
+        if (greedyVisual == 1) {
+            vec2 tileIdx = floor(aTex / 512.0 + 0.0001);
+            vTileOrigin = tileIdx / 64.0;
+            vTexCoord = aTex - tileIdx * 512.0;
+        } else {
+            vTileOrigin = vec2(0.0);
+            vTexCoord = aTex;
+        }
+    }
 }

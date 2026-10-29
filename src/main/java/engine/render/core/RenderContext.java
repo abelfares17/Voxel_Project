@@ -21,6 +21,11 @@ public class RenderContext {
     private float aspectRatio;
     private float dayNightPeriodSec;
     private int fpsReal;
+    private engine.render.shadow.ShadowCoverage shadowCoverage = new engine.render.shadow.ShadowCoverage(
+            false,engine.core.config.RenderConfig.SHADOW_FADE_START,engine.core.config.RenderConfig.SHADOW_FADE_END,
+            false,0,0,0,0,false,false,false);
+    public engine.render.shadow.ShadowCoverage getShadowCoverage() { return shadowCoverage; }
+    public void setShadowCoverage(engine.render.shadow.ShadowCoverage value) { shadowCoverage=java.util.Objects.requireNonNull(value); }
     private engine.time.CelestialState celestialState = engine.time.CelestialState.at(engine.time.TimeManager.DEFAULT_DAYS);
 
     public engine.time.CelestialState getCelestialState() { return celestialState; }

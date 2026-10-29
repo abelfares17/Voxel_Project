@@ -49,7 +49,7 @@ public class PerfLogger implements AutoCloseable {
                           "pos_x,pos_y,pos_z,yaw,pitch," +
                           "visibleChunks,renderedVertices," +
                           "shadowPassEnabled,leapfrogEnabled,debugShadowMode,perfBisectStage," +
-                          "shadowFrustumCulling,fbWidth,fbHeight,timeOfDay,tightShadowBounds,tightCameraBounds,indexedMeshes,storedVertices,meshBytes,focused,visible,iconified,cursorMode,cacheUniforms,uniformLocationQueries,compactVertices,skipUnlitShadows,greedyShadows,skyMode,activeLightPreviousFrame,lightElevationPreviousFrame");
+                          "shadowFrustumCulling,fbWidth,fbHeight,timeOfDay,tightShadowBounds,tightCameraBounds,indexedMeshes,storedVertices,meshBytes,focused,visible,iconified,cursorMode,cacheUniforms,uniformLocationQueries,compactVertices,skipUnlitShadows,greedyShadows,skyMode,activeLightPreviousFrame,lightElevationPreviousFrame,shadowCasterResidency,residentChunks,casterRequested,casterReady,casterCandidates,casterReach,casterReachLimited,casterBudgetLimited,legacyCasterResidency,shadowFadePreviousFrame,fadeStart,fadeEnd,requiredReadyPreviousFrame,requiredPreviousFrame,prefetchReadyPreviousFrame,prefetchPreviousFrame,coverageCompletePreviousFrame,samplingGuardValidPreviousFrame");
 
         System.out.println("Performance logging started: " + csvFilePath);
     }

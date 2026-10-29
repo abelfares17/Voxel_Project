@@ -21,12 +21,14 @@ public final class MeshBoundsGlTest {
             int oldVao = getVao(), oldVbo = getVbo(), oldEbo = getEbo();
             int shadowVao = shadowHandle(getShadowMesh(), "vao");
             int shadowVbo = shadowHandle(getShadowMesh(), "vbo");
+            int shadowEbo = shadowHandle(getShadowMesh(), "ebo");
             super.setMesh(vao, vbo, count, bounds, ebo, indices, stride);
             if (oldVao != 0 && oldVao != vao) require(!glIsVertexArray(oldVao), "old VAO not deleted at replacement");
             if (oldVbo != 0 && oldVbo != vbo) require(!glIsBuffer(oldVbo), "old VBO not deleted at replacement");
             if (oldEbo != 0 && oldEbo != ebo) require(!glIsBuffer(oldEbo), "old EBO not deleted at replacement");
             if (shadowVao != 0) require(!glIsVertexArray(shadowVao), "old shadow VAO not deleted");
             if (shadowVbo != 0) require(!glIsBuffer(shadowVbo), "old shadow VBO not deleted");
+            if (shadowEbo != 0) require(!glIsBuffer(shadowEbo), "old shadow EBO not deleted");
         }
     }
     private static int shadowHandle(ShadowMesh mesh, String name) {
@@ -72,8 +74,9 @@ public final class MeshBoundsGlTest {
                 System.out.println("Confirmed name reuse: old visual VAO " + oldVao + " is now the new shadow VAO");
             }
             if (glIsBuffer(oldVbo)) {
-                require(shadowHandle(chunk.getShadowMesh(), "vbo") == oldVbo, "unexpected live VBO name");
-                System.out.println("Confirmed name reuse: old visual VBO " + oldVbo + " is now the new shadow VBO");
+                require(shadowHandle(chunk.getShadowMesh(), "vbo") == oldVbo
+                        || shadowHandle(chunk.getShadowMesh(), "ebo") == oldVbo, "unexpected live VBO name");
+                System.out.println("Confirmed name reuse: old visual VBO " + oldVbo + " is now a new shadow buffer");
             }
             chunk.setBlock(15, 255, 15, (short) 0);
             upload(world, chunk);

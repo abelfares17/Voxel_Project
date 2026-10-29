@@ -106,7 +106,7 @@ public class ChunkCompressor {
         byte[] uncompressed = new byte[uncompressedSize];
 
         try (GZIPInputStream gzip = new GZIPInputStream(compressedInput)) {
-            int bytesRead = gzip.read(uncompressed);
+            int bytesRead = gzip.readNBytes(uncompressed, 0, uncompressed.length);
             if (bytesRead != uncompressedSize) {
                 throw new IOException("Decompression size mismatch");
             }

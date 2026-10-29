@@ -260,3 +260,30 @@ Ce calcul concerne la **longueur dans la direction du soleil**, pas une dilatati
 4. Ensuite seulement, envisager une pénombre liée à une source de taille angulaire finie et une atténuation atmosphérique plus progressive. Ce sont des améliorations de réalisme, **pas des réparations de casters manquants**. Le diamètre visuel artistique de 3° ne doit pas automatiquement imposer la même taille à la source d'éclairage.
 
 Les bugs shadow restent ouverts. Pour déterminer la correction suivante sans supposition, il manque surtout la pose/monde et des captures de la scène à heure fixe (facteur shadow et frontières des cascades).
+
+### HUD de reproduction et captures F2
+
+- **F3** affiche/masque, en haut à gauche, le nom du monde, les coordonnées XYZ du joueur (pas la position surélevée de la caméra), et yaw/pitch en degrés, à trois décimales. Il ne bascule plus le rendu AO.
+- **Maj+F3** conserve le diagnostic AO précédent.
+- **F2** capture la frame terminée, HUD inclus, dans `captures/screenshot_…png`, avant le swap. La notification **Screenshot saved** apparaît ensuite pendant trois secondes en bas de l'écran, seulement si le PNG a réellement été écrit. En cas d'échec, le message est **Screenshot failed (see console)**. Le chemin complet est dans la console.
+- Le buffer natif de capture est libéré immédiatement. Une capture implique toujours un readback et une écriture synchrones : ne pas prendre de captures pendant un benchmark FPS.
+
+Vérifications exécutées : build installDist PASS ; `tools/tests/DebugHudCaptureTest.java` PASS dans une fenêtre GL cachée et un répertoire temporaire. Le test couvre les fronts de touche F3, les textes de pose, la demande différée F2, un vrai PNG du back buffer, la notification envoyée au renderer UI, son expiration, et un échec d'écriture volontaire sans faux message de succès.
+
+Pour la montagne de World 10 : lancer le jeu normal (le harnais force une autre pose), charger le monde, activer F3, figer le temps avec F6 puis capturer F4 mode 1 et mode 5 avec F2. L'heure/astre et la pose seront directement lisibles sur les captures. Sur macOS, utiliser Fn+F2/F3 si ces touches sont interceptées par les raccourcis système.
+
+### 26 octobre — correction de la fusion shadow
+
+Les taches ont été reproduites dans les cartes de profondeur fusionnées. La correction conserve les arêtes unitaires et triangule les rectangles sans sommet central, puis partage les positions via un EBO. Les 27 cartes testées (trois poses, trois cascades, soleil rasant/matin/lune) ne présentent plus de gros écarts par rapport au non-fusionné.
+
+Benchmark ABBA final, caméra et soleil mobiles, 2268×1382 sur M2 Pro : **65,24 FPS sans fusion → 79,69 FPS avec fusion corrigée indexée (+22,15 %)**. Profil GPU séparé : shadow 7,95 → 4,82 ms. Le cas des casters déchargés reste distinct et n'est pas corrigé ici. Voir [le rapport complet et les commandes](Correction_fusion_ombres_2026-10-26.md).
+
+### 26 octobre — résidence des casters hors écran
+
+Une zone supplémentaire vers l'astre actif est désormais chargée indépendamment du rayon d'affichage, avec portée/budget limités. Les frontières sont reconstruites au chargement/déchargement et les résultats de meshing périmés sont rejetés. F3 indique les casters prêts/demandés et les limites atteintes. Le versant manquant du cas montagne est couvert par le plan testé ; le contrôle visuel interactif reste nécessaire. Coût ABBA au matin : **80,12 → 75,26 FPS**, buffers de meshes **466 → 740 MB**. Voir [diagnostic, tests, limites et protocole](Correction_residence_casters_2026-10-26.md).
+
+### 26 octobre — fondu de distance et résidence cohérente
+
+La politique précédente est remplacée par une portée caster/récepteur bornée : ombres pleines jusqu'à 80 blocs, fondu jusqu'à extinction à 128 blocs. La résidence distingue indispensables non tronqués et préchargement, garde le budget de 640 extras et prépare l'astre montant au crépuscule. **Maj+F4** bascule uniquement le fondu ; **F3** indique la couverture et les deux groupes de casters.
+
+Tests CPU/GPU et replay de World 10 sur cinq poses : PASS, avec limites de superposition et périodes de streaming explicitement documentées. ABBA à résidence identique : **73,94 → 74,09 FPS**, sans surcoût GPU détectable au niveau du budget visé. Voir [le rapport, les mesures et les commandes de reproduction](Fondu_ombres_distance_2026-10-26.md). Le contrôle visuel interactif en reculant reste recommandé ; cette approximation ne promet pas de résoudre toutes les occultations superposées.

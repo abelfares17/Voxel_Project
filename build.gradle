@@ -23,6 +23,36 @@ application {
     ]
 }
 
+tasks.named('run', JavaExec) {
+    // Always preserve applicationDefaultJvmArgs (-XstartOnFirstThread on macOS)
+    jvmArgs application.applicationDefaultJvmArgs
+
+    // Forward -Dvoxel.* and -Ddiagnostic.* system properties passed on the Gradle command line
+    System.getProperties().each { k, v ->
+        def key = k.toString()
+        if (key.startsWith("voxel.") || key.startsWith("diagnostic.")) {
+            systemProperty key, v.toString()
+        }
+    }
+    // Also parse -Dkey=value tokens from JAVA_OPTS / VOXEL_OPTS without overwriting -XstartOnFirstThread
+    [System.getenv("JAVA_OPTS"), System.getenv("VOXEL_OPTS")].each { envOpts ->
+        if (envOpts != null && !envOpts.trim().isEmpty()) {
+            envOpts.trim().split("\\s+").each { token ->
+                if (token.startsWith("-D") && token.length() > 2) {
+                    def eq = token.indexOf('=')
+                    if (eq > 2) {
+                        systemProperty token.substring(2, eq), token.substring(eq + 1)
+                    } else {
+                        systemProperty token.substring(2), "true"
+                    }
+                } else if (token != "-XstartOnFirstThread") {
+                    jvmArgs token
+                }
+            }
+        }
+    }
+}
+
 sourceSets {
     main {
         java {
