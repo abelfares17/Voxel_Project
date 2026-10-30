@@ -40,7 +40,6 @@ import engine.physics.PhysicsEngine;
 import engine.physics.RaycastHit;
 import engine.physics.VoxelRaycaster;
 import engine.render.TextRenderer;
-import engine.render.TextureCoords;
 import engine.render.UIRenderer;
 import engine.render.GpuPassTimer;
 import engine.render.camera.PerspectiveCamera;
@@ -48,9 +47,8 @@ import engine.render.core.RenderContext;
 import engine.render.renderer.ShadowRenderer;
 import engine.render.renderer.SkyRenderer;
 import engine.render.renderer.VoxelRenderer;
+import engine.ui.component.Hotbar;
 import engine.util.ScreenCapture;
-import engine.world.Block;
-import engine.world.BlockRegistry;
 import engine.world.Chunk;
 import engine.world.World;
 import engine.test.CameraCullingValidator;
@@ -71,8 +69,9 @@ public class Game {
 
     private final TextRenderer textRenderer;
     private final UIRenderer hudRenderer;
+    private final Hotbar hotbar;
     private boolean debugHudVisible;
-    private boolean cinematicMode = GameConfig.TEST_HARNESS_ENABLED || Boolean.getBoolean("voxel.cinematic");
+    private boolean cinematicMode = Boolean.getBoolean("voxel.cinematic");
     private boolean screenshotRequested;
     private RaycastHit currentRaycastHit;
     private float blockActionCooldown = 0f;
@@ -134,6 +133,7 @@ public class Game {
         this.skyRenderer = skyRenderer;
         this.textRenderer = textRenderer;
         this.hudRenderer = new UIRenderer();
+        this.hotbar = new Hotbar(player, textRenderer, voxelRenderer.getAtlasTextureId());
 
         this.lastTime = System.currentTimeMillis();
 
@@ -450,17 +450,14 @@ public class Game {
     }
 
     private void renderUI(RenderContext context) {
-        if (cinematicMode || GameConfig.TEST_HARNESS_ENABLED) {
+        if (cinematicMode) {
             return;
         }
 
         Matrix4f ortho = new Matrix4f().ortho2D(0, winWidth, winHeight, 0);
 
-        // 1. Center Crosshair
-        renderCrosshair(ortho);
-
-        // 2. Bottom 9-Slot Block Hotbar
-        renderHotbar(ortho);
+        // Single-draw-call batched Crosshair + 9-Slot Hotbar + 3D Isometric Block Icons + Slot Selector
+        hotbar.render(ortho, winWidth, winHeight, 1.0f);
 
         float textScale = 2.0f;
         if (debugHudVisible) {
@@ -534,76 +531,10 @@ public class Game {
         }
     }
 
-    private void renderCrosshair(Matrix4f ortho) {
-        float cx = winWidth * 0.5f;
-        float cy = winHeight * 0.5f;
-        float armLen = 10.0f;
-        float thickness = 2.0f;
-
-        Vector4f shadow = new Vector4f(0.05f, 0.05f, 0.08f, 0.75f);
-        Vector4f bright = new Vector4f(0.95f, 0.97f, 1.0f, 0.92f);
-
-        // Dark outline backing for readability on bright sky/snow/sand
-        hudRenderer.drawRect(cx - armLen - 1f, cy - thickness * 0.5f - 1f, armLen * 2f + 2f, thickness + 2f, shadow, ortho);
-        hudRenderer.drawRect(cx - thickness * 0.5f - 1f, cy - armLen - 1f, thickness + 2f, armLen * 2f + 2f, shadow, ortho);
-
-        // Crisp white center cross
-        hudRenderer.drawRect(cx - armLen, cy - thickness * 0.5f, armLen * 2f, thickness, bright, ortho);
-        hudRenderer.drawRect(cx - thickness * 0.5f, cy - armLen, thickness, armLen * 2f, bright, ortho);
-    }
-
-    private void renderHotbar(Matrix4f ortho) {
-        short[] slots = player.getHotbarBlocks();
-        int selected = player.getSelectedHotbarSlot();
-        int count = slots.length;
-
-        float slotSize = 54.0f;
-        float spacing = 6.0f;
-        float totalWidth = count * slotSize + (count - 1) * spacing;
-        float startX = (winWidth - totalWidth) * 0.5f;
-        float y = winHeight - slotSize - 18.0f;
-
-        // Outer translucent bar backing
-        hudRenderer.drawRectWithBorder(
-                startX - 8f, y - 8f,
-                totalWidth + 16f, slotSize + 16f,
-                new Vector4f(0.08f, 0.09f, 0.12f, 0.72f),
-                new Vector4f(0.26f, 0.29f, 0.35f, 0.85f),
-                2.0f, ortho
-        );
-
-        int atlasTex = voxelRenderer.getAtlasTextureId();
-        for (int i = 0; i < count; i++) {
-            float sx = startX + i * (slotSize + spacing);
-            boolean isSelected = (i == selected);
-
-            Vector4f slotFill = isSelected
-                    ? new Vector4f(0.26f, 0.29f, 0.36f, 0.92f)
-                    : new Vector4f(0.14f, 0.16f, 0.20f, 0.85f);
-            Vector4f slotBorder = isSelected
-                    ? new Vector4f(1.0f, 0.86f, 0.32f, 1.0f)
-                    : new Vector4f(0.38f, 0.42f, 0.48f, 0.85f);
-            float borderWidth = isSelected ? 3.0f : 1.5f;
-
-            hudRenderer.drawRectWithBorder(sx, y, slotSize, slotSize, slotFill, slotBorder, borderWidth, ortho);
-
-            Block block = BlockRegistry.getBlock(slots[i]);
-            if (block != null && block.getId() != 0 && atlasTex != 0) {
-                TextureCoords tc = block.getSideTexture();
-                float iconPad = 9.0f;
-                hudRenderer.drawTextureRegion(
-                        sx + iconPad, y + iconPad,
-                        slotSize - iconPad * 2f, slotSize - iconPad * 2f,
-                        atlasTex,
-                        tc.getUMin(), tc.getVMin(), tc.getUMax(), tc.getVMax(),
-                        new Vector4f(1f, 1f, 1f, 1f),
-                        ortho
-                );
-            }
-        }
-    }
-
     public void cleanup() {
+        if (hotbar != null) {
+            hotbar.cleanup();
+        }
         if (hudRenderer != null) {
             hudRenderer.cleanup();
         }

@@ -55,9 +55,11 @@ public class Shader {
         glBindAttribLocation(programId, 0, "aPos");
         glBindAttribLocation(programId, 1, "aTex");
         glBindAttribLocation(programId, 1, "aUV");        // TextRenderer (text_vertex.glsl)
-        glBindAttribLocation(programId, 1, "aTexCoord");  // UIRenderer (ui_vertex.glsl)
+        glBindAttribLocation(programId, 1, "aTexCoord");  // UIRenderer / Hotbar
         glBindAttribLocation(programId, 2, "aNormal");
+        glBindAttribLocation(programId, 2, "aColor");     // Hotbar (hotbar_vertex.glsl)
         glBindAttribLocation(programId, 3, "aAO");
+        glBindAttribLocation(programId, 3, "aTexMode");   // Hotbar (hotbar_vertex.glsl)
 
         glLinkProgram(programId);
         if (glGetProgrami(programId, GL_LINK_STATUS) == GL_FALSE) {

@@ -35,6 +35,7 @@ public class VoxelRenderer implements Renderer {
     private final ShadowRenderer shadowRenderer;
     private final int atlasTextureId;
     private RaycastHit selectedBlockHit;
+    private Shader outlineShader;
     private int outlineVao = 0;
     private int outlineVbo = 0;
 
@@ -287,12 +288,13 @@ public class VoxelRenderer implements Renderer {
             renderVisibleChunks(context, tightBounds, false);
         }
 
-        if (advanceFrame && selectedBlockHit != null) {
-            renderSelectedBlockOutline();
-        }
         if (advanceFrame) frameIndex = (frameIndex + 1) % 8;
 
         voxelShader.unbind();
+
+        if (advanceFrame && selectedBlockHit != null) {
+            renderSelectedBlockOutline(proj, view);
+        }
     }
 
     private int drawCalls;
@@ -364,6 +366,7 @@ public class VoxelRenderer implements Renderer {
 
     private void initOutlineMeshIfNeeded() {
         if (outlineVao != 0) return;
+        outlineShader = new Shader("shaders/outline_vertex.glsl", "shaders/outline_fragment.glsl");
         float min = -0.0025f;
         float max = 1.0025f;
         float[] v = {
@@ -394,7 +397,7 @@ public class VoxelRenderer implements Renderer {
         glBindVertexArray(0);
     }
 
-    private void renderSelectedBlockOutline() {
+    private void renderSelectedBlockOutline(Matrix4f proj, Matrix4f view) {
         if (selectedBlockHit == null) return;
         initOutlineMeshIfNeeded();
 
@@ -403,22 +406,26 @@ public class VoxelRenderer implements Renderer {
                 selectedBlockHit.blockY(),
                 selectedBlockHit.blockZ()
         );
-        voxelShader.setUniform("modelMatrix", chunkModelMatrix);
-        voxelShader.setUniform("wireframePass", 4);
+        outlineShader.bind();
+        outlineShader.setUniform("projectionMatrix", proj);
+        outlineShader.setUniform("viewMatrix", view);
+        outlineShader.setUniform("modelMatrix", chunkModelMatrix);
+        outlineShader.setUniform("uColor", new org.joml.Vector4f(0.05f, 0.06f, 0.08f, 1.0f));
 
         glDepthFunc(GL_LEQUAL);
         glBindVertexArray(outlineVao);
-        glVertexAttrib2f(1, 0.0f, 0.0f);
-        glVertexAttrib3f(2, 0.0f, 1.0f, 0.0f);
-        glVertexAttrib1f(3, 1.0f);
         glDrawArrays(GL_LINES, 0, 24);
         glBindVertexArray(0);
         glDepthFunc(GL_LESS);
-        voxelShader.setUniform("wireframePass", 0);
+        outlineShader.unbind();
     }
 
     @Override
     public void cleanup() {
+        if (outlineShader != null) {
+            outlineShader.cleanup();
+            outlineShader = null;
+        }
         if (outlineVao != 0) {
             glDeleteVertexArrays(outlineVao);
             outlineVao = 0;
