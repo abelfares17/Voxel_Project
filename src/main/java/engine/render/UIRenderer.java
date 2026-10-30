@@ -175,6 +175,47 @@ public class UIRenderer {
     }
 
     /**
+     * Draw a sub-region of a texture (e.g. a 16x16 block icon from the texture atlas).
+     */
+    public void drawTextureRegion(float x, float y, float width, float height,
+                                  int textureId, float u0, float v0, float u1, float v1,
+                                  Vector4f tintColor, Matrix4f projection) {
+        quadVertices = new float[]{
+            x, y, u0, v1,
+            x + width, y, u1, v1,
+            x + width, y + height, u1, v0,
+
+            x + width, y + height, u1, v0,
+            x, y + height, u0, v0,
+            x, y, u0, v1
+        };
+
+        glBindVertexArray(vao);
+        glBindBuffer(GL_ARRAY_BUFFER, vbo);
+        glBufferSubData(GL_ARRAY_BUFFER, 0, quadVertices);
+
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, textureId);
+
+        shader.bind();
+        shader.setUniform("uProjection", projection);
+        shader.setUniform("uColor", tintColor);
+        shader.setUniform("uTexture", 0);
+        shader.setUniform("uUseTexture", 1);
+
+        glEnable(GL_BLEND);
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+
+        glDrawArrays(GL_TRIANGLES, 0, 6);
+
+        glDisable(GL_BLEND);
+        glBindVertexArray(0);
+        glBindBuffer(GL_ARRAY_BUFFER, 0);
+        glBindTexture(GL_TEXTURE_2D, 0);
+        shader.unbind();
+    }
+
+    /**
      * Draw a rectangle with an outline/border.
      * @param x X position (top-left)
      * @param y Y position (top-left)

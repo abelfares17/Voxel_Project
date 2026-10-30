@@ -32,6 +32,35 @@ public class MeshWorkerManager {
         scheduleChunk(chunk);
     }
 
+    /**
+     * Immediately rebuild and upload a chunk's mesh on the GL thread (for interactive block break/place).
+     */
+    public void rebuildChunkImmediate(Chunk chunk) {
+        if (closing || chunk == null || chunk.isRetired()) return;
+        long revision = chunk.requestMeshRevision();
+        MeshData data = MeshBuilder.generateMeshData(chunk, world);
+        data.meshRevision = revision;
+        try {
+            int vao = glGenVertexArrays();
+            int vbo = glGenBuffers();
+
+            glBindVertexArray(vao);
+            glBindBuffer(GL_ARRAY_BUFFER, vbo);
+            MeshVertexLayout.upload(data);
+
+            int ebo = MeshBuilder.uploadIndices(data);
+            glBindVertexArray(0);
+            glBindBuffer(GL_ARRAY_BUFFER, 0);
+
+            chunk.setMesh(vao, vbo, data.vertexCount, data.bounds, ebo, data.indexCount, data.vertexStride());
+            if (data.shadowData != null) {
+                chunk.setShadowMesh(ShadowMesh.upload(data.shadowData));
+            }
+        } finally {
+            data.free();
+        }
+    }
+
     private void scheduleChunk(Chunk chunk) {
         if(closing || chunk.isRetired())return;
         if (queuedSet.add(chunk)) {

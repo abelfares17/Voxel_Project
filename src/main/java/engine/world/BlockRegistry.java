@@ -42,45 +42,48 @@ public class BlockRegistry {
         );
 
         // Bloc 4 = Bedrock
-        //TODO
         register(4, "bedrock", true,
             tex(13, 8),
             tex(13, 8),
             tex(13, 8)
         );
-        /*
-        // Bloc 5 = Bois (tronc)
-        //TODO
+
+        // Bloc 5 = Bois de chêne (tronc)
         register(5, "log", true,
-            tex(6, 3),
-            tex(6, 3),
-            tex(5, 3)
+            tex(10, 3), // top (anneaux)
+            tex(10, 3), // bottom (anneaux)
+            tex(5, 3)   // side (écorce)
         );
 
-        // Bloc 6 = Planches
-        //TODO
+        // Bloc 6 = Planches de chêne
         register(6, "planks", true,
-            tex(4, 3), tex(4, 3), tex(4, 3)
+            tex(4, 4), tex(4, 4), tex(4, 4)
         );
 
-        // Bloc 7 = Feuilles
-        //TODO
-        register(7, "leaves", false,
-            tex(7, 3), tex(7, 3), tex(7, 3)
+        // Bloc 7 = Feuillage de chêne
+        register(7, "leaves", true,
+            tex(15, 3), tex(15, 3), tex(15, 3)
         );
 
-        // Bloc 8 = Verre
-        //TODO
-        register(8, "glass", false,
+        // Bloc 8 = Verre encadré
+        register(8, "glass", true,
             tex(25, 3), tex(25, 3), tex(25, 3)
         );
 
-        // Bloc 9 = Pierre taillée
-        //TODO
+        // Bloc 9 = Pierre taillée (Cobblestone)
         register(9, "cobblestone", true,
             tex(12, 4), tex(12, 4), tex(12, 4)
         );
-         */
+
+        // Bloc 10 = Sable
+        register(10, "sand", true,
+            tex(18, 4), tex(18, 4), tex(18, 4)
+        );
+
+        // Bloc 11 = Briques
+        register(11, "bricks", true,
+            tex(24, 4), tex(24, 4), tex(24, 4)
+        );
     }
 
     private static void register(int id, String name, boolean solid,

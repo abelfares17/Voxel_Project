@@ -29,8 +29,8 @@ Ce document structure la feuille de route technique et fonctionnelle du moteur v
   - Isolation des informations de debug dans l'overlay `F3`.
 
 ### Prochaines Étapes Rendu
-- [ ] **Sélection de bloc (Block Outline Highlight)**
-  - Rendu d'une boîte filaire noire/blanche légèrement dilatée ($\pm 0.002$) autour du bloc visé par le joueur à moins de $5$ blocs.
+- [x] **Sélection de bloc (Block Outline Highlight) & Mode Cinématique (`F1`)** — [`VoxelRenderer.java`](../src/main/java/engine/render/renderer/VoxelRenderer.java), [`Game.java`](../src/main/java/engine/Game.java)
+  - Rendu d'une boîte filaire noire dilatée ($\pm 0.0025$) autour du bloc visé par le joueur à moins de $5,5$ blocs, désactivable avec `F1` (mode cinématique sans crosshair ni hotbar).
 - [ ] **Animation de cassage (Block Crack Overlay) & Particules de débris**
   - Superposition d'une texture d'étapes de fissuration (`destroy_stage_0..9`) lors du minage prolongé et système léger de particules 3D texturées soumises à la gravité lors de la destruction d'un bloc.
 - [ ] **Éclairage Voxel Propagé (Skylight + Block Light BFS)**
@@ -54,8 +54,8 @@ Ce document structure la feuille de route technique et fonctionnelle du moteur v
   - Tint macro-biomique basse fréquence par double octave de bruit de Perlin continu en coordonnées monde $(x, z)$.
 
 ### Prochaines Étapes Textures
-- [ ] **Activation et Texturage de la Palette Complète de Blocs** — [`BlockRegistry.java`](../src/main/java/engine/world/BlockRegistry.java)
-  - Décommenter, enregistrer et générer les textures $16\times 16$ modernes (avec variantes) pour : `log` (écorce + anneaux de tronc), `planks` (planches de chêne), `leaves` (feuillage découpé), `glass` (verre), `cobblestone` (pierre taillée), `sand` (sable), `snow` (neige), `water` (eau) et minerais (`coal_ore`, `iron_ore`).
+- [x] **Activation et Texturage de la Palette de Construction (11 blocs actifs + 4 variantes CTM chacun)** — [`BlockRegistry.java`](../src/main/java/engine/world/BlockRegistry.java), [`TextureLoader.java`](../src/main/java/engine/render/TextureLoader.java)
+  - Blocs enregistrés et texturés en $16\times 16$ harmonisé : `grass`, `dirt`, `stone`, `bedrock`, `log` (écorce + anneaux de tronc), `planks` (planches de chêne), `leaves` (feuillage), `glass` (verre encadré), `cobblestone` (pierre taillée), `sand` (sable) et `bricks` (briques).
 - [ ] **Migration vers `GL_TEXTURE_2D_ARRAY` & Mipmapping sans Saignement UV**
   - Remplacer l'atlas 2D par un `sampler2DArray` OpenGL 3.3 où chaque couche correspond à une tuile $16\times 16$. Cela permet d'activer `GL_REPEAT` natif en hardware, le mipmapping (`GL_NEAREST_MIPMAP_LINEAR`) et le filtrage anisotrope sur les quads Greedy Meshing sans aucun saignement des tuiles voisines ni coût `fract()` dans le fragment shader.
 
@@ -63,22 +63,19 @@ Ce document structure la feuille de route technique et fonctionnelle du moteur v
 
 ## 3. Playability (Physique, Raycasting, Interaction Blocs & Inventaire)
 
-### État Actuel & Fiabilisation Physique
-- [~] **Moteur Physique AABB & Collisions** — [`PhysicsEngine.java`](../src/main/java/engine/physics/PhysicsEngine.java), [`CollisionDetector.java`](../src/main/java/engine/physics/CollisionDetector.java), [`Player.java`](../src/main/java/engine/entity/Player.java)
-  - *Existant :* Boîtes englobantes [`AABB.java`](../src/main/java/engine/physics/AABB.java), gravité, saut, friction horizontale, résolution axe par axe ($X, Y, Z$) et bascule mode Spectateur / Physique (`P`).
-  - [ ] **Correction des collisions inter-chunks :** [`CollisionDetector.java`](../src/main/java/engine/physics/CollisionDetector.java) ne teste actuellement que le `Chunk` unique sous le centre du joueur, provoquant des traversées de murs aux frontières de chunks ($x=0/15, z=0/15$). Passer `World` au détecteur de collision pour interroger `world.getBlockAt(wx, wy, wz)`.
-  - [ ] **Intégration physique indépendante du framerate (`deltaTime`) :** Pondérer la gravité, la vélocité et le déplacement par `deltaTime` (ou pas de temps fixe `60 Hz`) et corriger la bascule `P` dans [`Game.java`](../src/main/java/engine/Game.java) avec `isKeyJustPressed(GLFW_KEY_P)` au lieu de `isKeyPressed`.
-  - [ ] **Sprint, Accroupissement (Sneak / Edge-Guard) & Marche Fluide :** Ajouter le sprint (`Ctrl` / double-`W` avec léger élargissement dynamique du FOV) et le mode accroupi (`Shift`) empêchant de tomber du bord d'un bloc.
-
-### Interaction Voxel & Boucle de Gameplay
-- [ ] **Raycasting Voxel 3D Exact (Algorithme DDA d'Amanatides & Woo)**
-  - Implémenter `VoxelRaycaster.raycast(World, origin, direction, maxDistance=5.0f)` retournant `RaycastHit(blockX, blockY, blockZ, faceNormalX, faceNormalY, faceNormalZ, hitBlock)`.
-- [ ] **Cassage et Pose de Blocs en Temps Réel**
-  - **Clic gauche :** Détruire le bloc visé (`world.setBlockAt(x, y, z, AIR)`) avec reconstruction immédiate du maillage du chunk (et du chunk adjacent si le bloc touché est sur une bordure $x \in \{0,15\}$ ou $z \in \{0,15\}$).
-  - **Clic droit :** Poser le bloc sélectionné sur la face adjacente `(x + nx, y + ny, z + nz)` après vérification que l'AABB du nouveau bloc n'intersecte pas l'AABB du [`Player.java`](../src/main/java/engine/entity/Player.java).
-- [ ] **Barre d'Action (Hotbar 9 Slots) & Inventaire**
-  - Affichage HUD en bas de l'écran d'une Hotbar à 9 emplacements sélectionnables via les touches `1` à `9` et la molette de la souris, avec aperçu icône de chaque bloc.
-  - Écran d'inventaire complet ouvrable avec `E` (grille de sélection de blocs en mode Créatif et gestion des piles d'objets `ItemStack(blockId, count)` en mode Survie).
+### Physique & Interaction Voxel (Validé — Jalon 1)
+- [x] **Moteur Physique AABB Inter-Chunks & Intégration `deltaTime`** — [`PhysicsEngine.java`](../src/main/java/engine/physics/PhysicsEngine.java), [`CollisionDetector.java`](../src/main/java/engine/physics/CollisionDetector.java), [`Player.java`](../src/main/java/engine/entity/Player.java)
+  - [x] **Collisions inter-chunks sur `World` :** Résolution AABB complète ($0,6 \times 1,8 \times 0,6$) à travers les frontières de chunks (`world.getBlockAt(wx, wy, wz)`), éliminant tout bug de traversée aux bords $x/z \in \{0, 15\}$.
+  - [x] **Intégration physique indépendante du framerate (`deltaTime`) :** Gravité (`-28 blocks/s²`), saut (`8.8 blocks/s`), amortissement exponentiel et bascule instantanée Mode Physique / Mode Spectateur sur `P` avec dégagement anti-blocage (`ensureNotStuckInBlocks`).
+  - [x] **Sprint (`Ctrl`) & Accroupissement avec Edge-Guard (`Shift`) :** Retenue automatique au bord des blocs en mode accroupi et interpolation fluide de la hauteur des yeux (`1.62m` → `1.32m`).
+- [x] **Raycasting Voxel 3D Exact (Algorithme DDA d'Amanatides & Woo)** — [`VoxelRaycaster.java`](../src/main/java/engine/physics/VoxelRaycaster.java), [`RaycastHit.java`](../src/main/java/engine/physics/RaycastHit.java)
+  - Traversée 3D exacte jusqu'à $5,5$ blocs retournant les coordonnées du bloc touché et la normale de la face visée `(nx, ny, nz)`.
+- [x] **Cassage (Clic Gauche) et Pose de Blocs (Clic Droit) en Temps Réel** — [`World.java`](../src/main/java/engine/world/World.java), [`MeshWorkerManager.java`](../src/main/java/engine/render/MeshWorkerManager.java), [`Game.java`](../src/main/java/engine/Game.java)
+  - Reconstruction synchrone immédiate (`0 ms` de latence, zéro clignotement) du chunk modifié et des chunks voisins frontaliers/diagonaux, avec vérification anti-auto-emmurement AABB joueur.
+- [x] **Barre d'Action (Hotbar 9 Slots) & Mode Cinématique (`F1`)** — [`Game.java`](../src/main/java/engine/Game.java), [`UIRenderer.java`](../src/main/java/engine/render/UIRenderer.java)
+  - Sélection via touches `1–9` ou molette de la souris avec icônes de blocs extraites de l'atlas, réticule central contrasté, et touche `F1` masquant intégralement l'interface (crosshair, hotbar, contour 3D et HUD).
+- [ ] **Écran d'Inventaire Complet (`E`) & Piles d'Objets (`ItemStack`)**
+  - Grille de sélection complète ouvrable avec `E` et gestion des quantités en mode Survie.
 
 ---
 

@@ -272,16 +272,22 @@ java -XstartOnFirstThread -jar build/libs/TOB_Voxel_Project-1.0-SNAPSHOT.jar
 
 ## 🎮 Controls
 
-### In-Game Movement
+### In-Game Movement & Block Interaction
 - **W/A/S/D** - Move forward/left/backward/right
-- **Space** - Jump / Fly up (in spectator mode)
-- **Shift** - Crouch / Fly down (in spectator mode)
-- **P** - Toggle Spectator (free-flight) mode
+- **Space** - Jump (Physics mode) / Fly up (Spectator mode)
+- **Shift** - Sneak with Edge-Guard (Physics mode, prevents falling off ledges) / Fly down (Spectator mode)
+- **Left Ctrl** - Sprint (Physics mode) / Fast flight (Spectator mode)
+- **P** - Toggle between **Physics Mode** (gravity + cross-chunk AABB collisions) and **Spectator Flight Mode** (noclip)
+- **Left Click** - Break targeted block (within 5.5 blocks)
+- **Right Click** - Place selected Hotbar block on targeted face
+- **1..9 / Mouse Scroll Wheel** - Select block in the 9-slot Hotbar (`grass`, `dirt`, `stone`, `cobblestone`, `log`, `planks`, `leaves`, `sand`, `bricks`)
+- **F1** - Toggle **Cinematic Mode** (hides crosshair, hotbar, 3D block selection outline, and HUD overlays)
 - **Mouse** - Look around (`Left Click` to capture cursor, `ESC` to release cursor)
 
 ### Debug & Rendering Pipeline Keys
 | Key | Action |
 | :--- | :--- |
+| **`F1`** | Toggle **Cinematic Mode** (hides crosshair, hotbar, block selection outline, and debug HUD) |
 | **`F2`** | Capture screenshot to `screenshots/` |
 | **`F3`** | Toggle full Debug HUD (coordinates, yaw/pitch, caster residency, shadow coverage, time, solar angle, and FPS). Screen is 100% clean when `F3` is off. |
 | **`Shift + F3`** | Toggle Vertex Ambient Occlusion (`AO Debug`) isolation view |

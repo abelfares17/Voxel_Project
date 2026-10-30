@@ -134,9 +134,9 @@ public class Chunk {
         this.dataDirty = dataDirty;
     }
 
-    /** Indique si un VAO/VBO a déjà été généré et peut être rendu. */
+    /** Indique si un VAO/VBO a déjà été généré et peut être rendu (garde l'ancien mesh visible pendant un remeshing). */
     public boolean isReady() {
-        return (vao != 0) && (vbo != 0) && (vertexCount > 0) && (!meshDirty);
+        return !retired && (vao != 0) && (vbo != 0) && (vertexCount > 0);
     }
 
     /**

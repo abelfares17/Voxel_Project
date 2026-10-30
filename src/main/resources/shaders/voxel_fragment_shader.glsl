@@ -728,11 +728,17 @@ vec2 resolveAtlasUV(vec3 normal) {
 
         // 2. Stochastic UV rotation & mirror per block
         if (abs(normal.y) > 0.5) {
-            // Horizontal faces (grass_top, dirt, bedrock): full 8-way square symmetry
+            bool isRow4Directional = abs(vTileOrigin.y - (60.0 / 64.0)) < 0.004;
             int rot = (h >> 2) & 3;
-            if (rot == 1)      localUV = vec2(1.0 - localUV.y, localUV.x);
-            else if (rot == 2) localUV = vec2(1.0 - localUV.x, 1.0 - localUV.y);
-            else if (rot == 3) localUV = vec2(localUV.y, 1.0 - localUV.x);
+            if (isRow4Directional) {
+                // Planks / bricks / sand: preserve horizontal board/course alignment (0 or 180 deg only)
+                if ((rot & 1) != 0) localUV = vec2(1.0 - localUV.x, 1.0 - localUV.y);
+            } else {
+                // Isotropic horizontal faces (grass_top, dirt, stone, cobblestone, log_top, leaves): 8-way D4 symmetry
+                if (rot == 1)      localUV = vec2(1.0 - localUV.y, localUV.x);
+                else if (rot == 2) localUV = vec2(1.0 - localUV.x, 1.0 - localUV.y);
+                else if (rot == 3) localUV = vec2(localUV.y, 1.0 - localUV.x);
+            }
             if (((h >> 4) & 1) != 0) localUV.x = 1.0 - localUV.x;
         } else {
             // Vertical faces (grass_side, stone, dirt side): preserve vertical gravity, random horizontal flip
@@ -768,8 +774,11 @@ void main() {
 
     float fragAO = evaluateAO();
 
-    // Solid-shaded hidden-line wireframe mode (F7 / Shift+F7)
-    if (wireframePass == 2) {
+    // Solid-shaded hidden-line wireframe mode (F7 / Shift+F7) & Block selection outline (pass 4)
+    if (wireframePass == 4) {
+        fragColor = vec4(0.05, 0.06, 0.08, 1.0); // Crisp dark charcoal outline for targeted block
+        return;
+    } else if (wireframePass == 2) {
         fragColor = vec4(0.06, 0.09, 0.12, 1.0); // Crisp dark slate edges for visual mesh
         return;
     } else if (wireframePass == 3) {

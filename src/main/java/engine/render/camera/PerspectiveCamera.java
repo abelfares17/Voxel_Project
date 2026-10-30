@@ -53,7 +53,7 @@ public class PerspectiveCamera implements Camera {
     @Override
     public Vector3f getPosition() {
         if (player != null) {
-            return player.getTransform().getPosition().add(0f, GameConfig.PLAYER_HEIGHT, 0f, new Vector3f());
+            return player.getTransform().getPosition().add(0f, player.getEyeHeight(), 0f, new Vector3f());
         }
         return new Vector3f(0, 0, 0);
     }

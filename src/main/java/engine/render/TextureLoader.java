@@ -77,11 +77,19 @@ public class TextureLoader {
     private record BlockTileOverride(String baseName, int col, int row) {}
 
     private static final BlockTileOverride[] MODERN_BLOCK_TILES = {
-        new BlockTileOverride("textures/blocks/grass_top",  22, 6),
-        new BlockTileOverride("textures/blocks/grass_side", 21, 7),
-        new BlockTileOverride("textures/blocks/dirt",       18, 11),
-        new BlockTileOverride("textures/blocks/stone",      31, 19),
-        new BlockTileOverride("textures/blocks/bedrock",    13, 8)
+        new BlockTileOverride("textures/blocks/grass_top",   22, 6),
+        new BlockTileOverride("textures/blocks/grass_side",  21, 7),
+        new BlockTileOverride("textures/blocks/dirt",        18, 11),
+        new BlockTileOverride("textures/blocks/stone",       31, 19),
+        new BlockTileOverride("textures/blocks/bedrock",     13, 8),
+        new BlockTileOverride("textures/blocks/log_side",     5, 3),
+        new BlockTileOverride("textures/blocks/log_top",     10, 3),
+        new BlockTileOverride("textures/blocks/leaves",      15, 3),
+        new BlockTileOverride("textures/blocks/glass",       25, 3),
+        new BlockTileOverride("textures/blocks/planks",       4, 4),
+        new BlockTileOverride("textures/blocks/cobblestone", 12, 4),
+        new BlockTileOverride("textures/blocks/sand",        18, 4),
+        new BlockTileOverride("textures/blocks/bricks",      24, 4)
     };
 
     private static void overlayBlockFaceTextures(int atlasWidth, int atlasHeight, int format) {

@@ -17,7 +17,7 @@ public class Input {
     private final UIScreenScaler scaler;
 
     // Touches de jeu
-    public boolean forward, backward, left, right, jump, crouch, coords;
+    public boolean forward, backward, left, right, jump, crouch, sprint, coords;
     // Position et delta souris
     private double lastX, lastY, x, y;
     private double deltaX, deltaY;
@@ -61,6 +61,7 @@ public class Input {
         right    = glfwGetKey(window, GLFW_KEY_D)     == GLFW_PRESS;
         jump     = glfwGetKey(window, GLFW_KEY_SPACE) == GLFW_PRESS;
         crouch   = glfwGetKey(window, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS || glfwGetKey(window, GLFW_KEY_RIGHT_SHIFT) == GLFW_PRESS;
+        sprint   = glfwGetKey(window, GLFW_KEY_LEFT_CONTROL) == GLFW_PRESS || glfwGetKey(window, GLFW_KEY_RIGHT_CONTROL) == GLFW_PRESS;
         coords   = glfwGetKey(window, GLFW_KEY_C) == GLFW_PRESS;
 
         // Polling position souris
@@ -80,10 +81,11 @@ public class Input {
         int[] trackedKeys = {GLFW_KEY_BACKSPACE, GLFW_KEY_ENTER, GLFW_KEY_ESCAPE,
                             GLFW_KEY_DELETE, GLFW_KEY_UP, GLFW_KEY_DOWN,
                             GLFW_KEY_LEFT, GLFW_KEY_RIGHT, GLFW_KEY_HOME, GLFW_KEY_END,
-                            GLFW_KEY_F2, GLFW_KEY_F3, GLFW_KEY_F4, GLFW_KEY_F5, GLFW_KEY_F6,
+                            GLFW_KEY_F1, GLFW_KEY_F2, GLFW_KEY_F3, GLFW_KEY_F4, GLFW_KEY_F5, GLFW_KEY_F6,
                             GLFW_KEY_F7, GLFW_KEY_F8, GLFW_KEY_F9, GLFW_KEY_F10,
-                            GLFW_KEY_F11, GLFW_KEY_F12,  // Debug keys
-                            GLFW_KEY_0, GLFW_KEY_9,  // Number keys for slow motion
+                            GLFW_KEY_F11, GLFW_KEY_F12,  // Debug & Cinematic keys
+                            GLFW_KEY_0, GLFW_KEY_1, GLFW_KEY_2, GLFW_KEY_3, GLFW_KEY_4,
+                            GLFW_KEY_5, GLFW_KEY_6, GLFW_KEY_7, GLFW_KEY_8, GLFW_KEY_9,  // Hotbar & speed keys
                             GLFW_KEY_B, GLFW_KEY_J, GLFW_KEY_K, GLFW_KEY_L, GLFW_KEY_M, GLFW_KEY_P};  // Toggle keys
         for (int key : trackedKeys) {
             prevKeys[key] = currKeys[key];

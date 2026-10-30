@@ -6,13 +6,17 @@ import org.joml.Vector3f;
 import static org.lwjgl.opengl.GL11.*;
 import static org.lwjgl.opengl.GL13.*;
 import static org.lwjgl.opengl.GL14.*;
+import static org.lwjgl.opengl.GL15.*;
+import static org.lwjgl.opengl.GL20.glEnableVertexAttribArray;
 import static org.lwjgl.opengl.GL20.glVertexAttrib1f;
 import static org.lwjgl.opengl.GL20.glVertexAttrib2f;
 import static org.lwjgl.opengl.GL20.glVertexAttrib3f;
+import static org.lwjgl.opengl.GL20.glVertexAttribPointer;
 import static org.lwjgl.opengl.GL30.*;
 
 import engine.core.config.GameConfig;
 import engine.core.config.RenderConfig;
+import engine.physics.RaycastHit;
 import engine.render.MeshBuilder;
 import engine.render.ShadowMesh;
 import engine.render.Shader;
@@ -30,6 +34,13 @@ public class VoxelRenderer implements Renderer {
     private final Shader voxelShader;
     private final ShadowRenderer shadowRenderer;
     private final int atlasTextureId;
+    private RaycastHit selectedBlockHit;
+    private int outlineVao = 0;
+    private int outlineVbo = 0;
+
+    public int getAtlasTextureId() { return atlasTextureId; }
+    public void setSelectedBlockHit(RaycastHit hit) { this.selectedBlockHit = hit; }
+    public RaycastHit getSelectedBlockHit() { return selectedBlockHit; }
 
     // AO tuning
     private float aoMin = 0.5f;
@@ -275,6 +286,10 @@ public class VoxelRenderer implements Renderer {
             voxelShader.setUniform("wireframePass", 0);
             renderVisibleChunks(context, tightBounds, false);
         }
+
+        if (advanceFrame && selectedBlockHit != null) {
+            renderSelectedBlockOutline();
+        }
         if (advanceFrame) frameIndex = (frameIndex + 1) % 8;
 
         voxelShader.unbind();
@@ -347,9 +362,71 @@ public class VoxelRenderer implements Renderer {
         }
     }
 
+    private void initOutlineMeshIfNeeded() {
+        if (outlineVao != 0) return;
+        float min = -0.0025f;
+        float max = 1.0025f;
+        float[] v = {
+            // Bottom rectangle
+            min, min, min,  max, min, min,
+            max, min, min,  max, min, max,
+            max, min, max,  min, min, max,
+            min, min, max,  min, min, min,
+            // Top rectangle
+            min, max, min,  max, max, min,
+            max, max, min,  max, max, max,
+            max, max, max,  min, max, max,
+            min, max, max,  min, max, min,
+            // Vertical pillars
+            min, min, min,  min, max, min,
+            max, min, min,  max, max, min,
+            max, min, max,  max, max, max,
+            min, min, max,  min, max, max
+        };
+        outlineVao = glGenVertexArrays();
+        outlineVbo = glGenBuffers();
+        glBindVertexArray(outlineVao);
+        glBindBuffer(GL_ARRAY_BUFFER, outlineVbo);
+        glBufferData(GL_ARRAY_BUFFER, v, GL_STATIC_DRAW);
+        glVertexAttribPointer(0, 3, GL_FLOAT, false, 3 * Float.BYTES, 0);
+        glEnableVertexAttribArray(0);
+        glBindBuffer(GL_ARRAY_BUFFER, 0);
+        glBindVertexArray(0);
+    }
+
+    private void renderSelectedBlockOutline() {
+        if (selectedBlockHit == null) return;
+        initOutlineMeshIfNeeded();
+
+        chunkModelMatrix.translation(
+                selectedBlockHit.blockX(),
+                selectedBlockHit.blockY(),
+                selectedBlockHit.blockZ()
+        );
+        voxelShader.setUniform("modelMatrix", chunkModelMatrix);
+        voxelShader.setUniform("wireframePass", 4);
+
+        glDepthFunc(GL_LEQUAL);
+        glBindVertexArray(outlineVao);
+        glVertexAttrib2f(1, 0.0f, 0.0f);
+        glVertexAttrib3f(2, 0.0f, 1.0f, 0.0f);
+        glVertexAttrib1f(3, 1.0f);
+        glDrawArrays(GL_LINES, 0, 24);
+        glBindVertexArray(0);
+        glDepthFunc(GL_LESS);
+        voxelShader.setUniform("wireframePass", 0);
+    }
+
     @Override
     public void cleanup() {
-        
+        if (outlineVao != 0) {
+            glDeleteVertexArrays(outlineVao);
+            outlineVao = 0;
+        }
+        if (outlineVbo != 0) {
+            glDeleteBuffers(outlineVbo);
+            outlineVbo = 0;
+        }
     }
 
     public ShadowRenderer getShadowRenderer() {

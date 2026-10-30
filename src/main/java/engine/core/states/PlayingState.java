@@ -284,6 +284,9 @@ public class PlayingState implements GameState {
         }
 
         // Cleanup renderers
+        if (game != null) {
+            game.cleanup();
+        }
         if (voxelRenderer != null) {
             voxelRenderer.cleanup();
             voxelRenderer = null;

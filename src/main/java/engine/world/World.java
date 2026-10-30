@@ -282,6 +282,40 @@ public class World {
         }
     }
 
+    /**
+     * Interactive block modification (player break/place) with immediate same-frame remeshing
+     * of the modified chunk and any affected boundary neighbor chunks (including corner AO neighbors).
+     */
+    public boolean setBlockAtInteractive(int x, int y, int z, short id) {
+        if (y < 0 || y >= Chunk.HEIGHT) return false;
+        int chunkX = Math.floorDiv(x, Chunk.WIDTH);
+        int chunkZ = Math.floorDiv(z, Chunk.DEPTH);
+        int localX = Math.floorMod(x, Chunk.WIDTH);
+        int localZ = Math.floorMod(z, Chunk.DEPTH);
+
+        Chunk chunk = getChunk(chunkX, chunkZ);
+        if (chunk == null) return false;
+
+        chunk.setBlock(localX, y, localZ, id);
+        meshManager.rebuildChunkImmediate(chunk);
+
+        int dx = (localX == 0) ? -1 : (localX == Chunk.WIDTH - 1 ? 1 : 0);
+        int dz = (localZ == 0) ? -1 : (localZ == Chunk.DEPTH - 1 ? 1 : 0);
+        if (dx != 0) {
+            Chunk nx = getChunk(chunkX + dx, chunkZ);
+            if (nx != null) meshManager.rebuildChunkImmediate(nx);
+        }
+        if (dz != 0) {
+            Chunk nz = getChunk(chunkX, chunkZ + dz);
+            if (nz != null) meshManager.rebuildChunkImmediate(nz);
+        }
+        if (dx != 0 && dz != 0) {
+            Chunk nDiag = getChunk(chunkX + dx, chunkZ + dz);
+            if (nDiag != null) meshManager.rebuildChunkImmediate(nDiag);
+        }
+        return true;
+    }
+
     public Chunk generateChunk(ChunkPos pos) {
         // Try to load from disk first
         Chunk loaded = storage.loadChunk(pos.x(), pos.z());

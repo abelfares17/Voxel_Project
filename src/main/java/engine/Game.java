@@ -3,10 +3,14 @@ package engine;
 
 import org.joml.Matrix4f;
 import org.joml.Vector3f;
+import org.joml.Vector4f;
 import static org.lwjgl.glfw.GLFW.GLFW_CURSOR;
 import static org.lwjgl.glfw.GLFW.GLFW_CURSOR_DISABLED;
+import static org.lwjgl.glfw.GLFW.GLFW_KEY_1;
+import static org.lwjgl.glfw.GLFW.GLFW_KEY_9;
 import static org.lwjgl.glfw.GLFW.GLFW_KEY_B;
 import static org.lwjgl.glfw.GLFW.GLFW_KEY_ESCAPE;
+import static org.lwjgl.glfw.GLFW.GLFW_KEY_F1;
 import static org.lwjgl.glfw.GLFW.GLFW_KEY_F10;
 import static org.lwjgl.glfw.GLFW.GLFW_KEY_F11;
 import static org.lwjgl.glfw.GLFW.GLFW_KEY_F12;
@@ -21,6 +25,8 @@ import static org.lwjgl.glfw.GLFW.GLFW_KEY_L;
 import static org.lwjgl.glfw.GLFW.GLFW_KEY_M;
 import static org.lwjgl.glfw.GLFW.GLFW_KEY_P;
 import static org.lwjgl.glfw.GLFW.GLFW_MOUSE_BUTTON_LEFT;
+import static org.lwjgl.glfw.GLFW.GLFW_MOUSE_BUTTON_RIGHT;
+import static org.lwjgl.glfw.GLFW.glfwGetInputMode;
 import static org.lwjgl.glfw.GLFW.glfwSetInputMode;
 
 import static org.lwjgl.opengl.GL11.glFinish;
@@ -29,8 +35,13 @@ import engine.core.config.GameConfig;
 import engine.core.config.RenderConfig;
 import engine.entity.Player;
 import engine.input.Input;
+import engine.physics.AABB;
 import engine.physics.PhysicsEngine;
+import engine.physics.RaycastHit;
+import engine.physics.VoxelRaycaster;
 import engine.render.TextRenderer;
+import engine.render.TextureCoords;
+import engine.render.UIRenderer;
 import engine.render.GpuPassTimer;
 import engine.render.camera.PerspectiveCamera;
 import engine.render.core.RenderContext;
@@ -38,6 +49,8 @@ import engine.render.renderer.ShadowRenderer;
 import engine.render.renderer.SkyRenderer;
 import engine.render.renderer.VoxelRenderer;
 import engine.util.ScreenCapture;
+import engine.world.Block;
+import engine.world.BlockRegistry;
 import engine.world.Chunk;
 import engine.world.World;
 import engine.test.CameraCullingValidator;
@@ -57,8 +70,14 @@ public class Game {
     private final CameraCullingValidator cameraCullingValidator = new CameraCullingValidator();
 
     private final TextRenderer textRenderer;
+    private final UIRenderer hudRenderer;
     private boolean debugHudVisible;
+    private boolean cinematicMode = GameConfig.TEST_HARNESS_ENABLED || Boolean.getBoolean("voxel.cinematic");
     private boolean screenshotRequested;
+    private RaycastHit currentRaycastHit;
+    private float blockActionCooldown = 0f;
+    private static final float REACH_DISTANCE = 5.5f;
+    private static final float BLOCK_ACTION_REPEAT_SEC = 0.22f;
 
     private long lastTime;
     private int winWidth;
@@ -88,6 +107,9 @@ public class Game {
         // Load player position from save (unless in test harness mode)
         if (!GameConfig.TEST_HARNESS_ENABLED) {
             world.getStorage().loadPlayer(player);
+            if (!player.isSpectatorMode()) {
+                player.ensureNotStuckInBlocks(world);
+            }
         } else {
             // Test harness: Use deterministic spawn position
             Vector3f spawnPos = GameConfig.TEST_FORCE_SPAWN_POS;
@@ -111,6 +133,7 @@ public class Game {
         this.shadowRenderer = shadowRenderer;
         this.skyRenderer = skyRenderer;
         this.textRenderer = textRenderer;
+        this.hudRenderer = new UIRenderer();
 
         this.lastTime = System.currentTimeMillis();
 
@@ -130,9 +153,16 @@ public class Game {
         world.getTimeManager().updateSeconds(deltaTimeSec);
 
         // Handle cursor transitions before player look consumes this frame's mouse delta.
+        boolean cursorWasCaptured = glfwGetInputMode(window, GLFW_CURSOR) == GLFW_CURSOR_DISABLED;
+        boolean justCapturedCursor = false;
         if (!GameConfig.TEST_HARNESS_ENABLED) {
-            if (input.isKeyJustPressed(GLFW_KEY_ESCAPE)) input.setCursorCaptured(false);
-            else if (input.isMousePressed(GLFW_MOUSE_BUTTON_LEFT)) input.setCursorCaptured(true);
+            if (input.isKeyJustPressed(GLFW_KEY_ESCAPE)) {
+                input.setCursorCaptured(false);
+                cursorWasCaptured = false;
+            } else if (!cursorWasCaptured && input.isMousePressed(GLFW_MOUSE_BUTTON_LEFT)) {
+                input.setCursorCaptured(true);
+                justCapturedCursor = true;
+            }
         }
 
         int[] chunkCoords = player.getChunkCoords(GameConfig.CHUNK_WIDTH, GameConfig.CHUNK_DEPTH);
@@ -141,7 +171,7 @@ public class Game {
 
         Chunk currentChunk = world.getChunk(playerChunkX, playerChunkZ);
         if (currentChunk != null && !GameConfig.TEST_HARNESS_ENABLED) {
-            player.update(currentChunk, input);
+            player.update(world, input, deltaTimeSec);
         }
 
         chunkCoords = player.getChunkCoords(GameConfig.CHUNK_WIDTH, GameConfig.CHUNK_DEPTH);
@@ -150,9 +180,80 @@ public class Game {
         // The harness owns the pose and controls; real mouse/key input must not alter a run.
         if (GameConfig.TEST_HARNESS_ENABLED) return;
 
-        // Toggle spectator mode
-        if (input.isKeyPressed(GLFW_KEY_P)) {
+        // Cinematic mode toggle (F1) - hides crosshair, hotbar, block outline & HUD
+        if (input.isKeyJustPressed(GLFW_KEY_F1)) {
+            cinematicMode = !cinematicMode;
+            if (!cinematicMode) {
+                showDebugNotification("Cinematic Mode (F1): OFF");
+            }
+        }
+
+        // Toggle Physics vs Spectator Flight mode (P)
+        if (input.isKeyJustPressed(GLFW_KEY_P)) {
             player.setSpectatorMode(!player.isSpectatorMode());
+            if (!player.isSpectatorMode()) {
+                player.ensureNotStuckInBlocks(world);
+            }
+            showDebugNotification(player.isSpectatorMode()
+                    ? "Mode: Vol Spectateur (Noclip)"
+                    : "Mode: Physique (Gravite + Collisions)");
+        }
+
+        // Hotbar selection (keys 1-9 and mouse scroll wheel)
+        for (int key = GLFW_KEY_1; key <= GLFW_KEY_9; key++) {
+            if (input.isKeyJustPressed(key)) {
+                player.setSelectedHotbarSlot(key - GLFW_KEY_1);
+            }
+        }
+        float scrollY = input.consumeScrollY();
+        if (Math.abs(scrollY) >= 0.1f) {
+            player.scrollHotbar(scrollY > 0 ? -1 : 1);
+        }
+
+        // 3D DDA Voxel Raycast from camera eye along player look vector
+        Vector3f eyePos = camera.getPosition();
+        Vector3f lookDir = VoxelRaycaster.getLookDirection(player.getYaw(), player.getPitch());
+        currentRaycastHit = VoxelRaycaster.raycast(world, eyePos, lookDir, REACH_DISTANCE);
+        voxelRenderer.setSelectedBlockHit(cinematicMode ? null : currentRaycastHit);
+
+        // Block breaking (Left-Click) and Block placing (Right-Click)
+        if (blockActionCooldown > 0f) {
+            blockActionCooldown = Math.max(0f, blockActionCooldown - deltaTimeSec);
+        }
+        if (cursorWasCaptured && !justCapturedCursor && currentRaycastHit != null) {
+            boolean leftClick = input.isMouseClicked(GLFW_MOUSE_BUTTON_LEFT)
+                    || (input.isMousePressed(GLFW_MOUSE_BUTTON_LEFT) && blockActionCooldown <= 0f);
+            boolean rightClick = input.isMouseClicked(GLFW_MOUSE_BUTTON_RIGHT)
+                    || (input.isMousePressed(GLFW_MOUSE_BUTTON_RIGHT) && blockActionCooldown <= 0f);
+
+            if (leftClick) {
+                int bx = currentRaycastHit.blockX();
+                int by = currentRaycastHit.blockY();
+                int bz = currentRaycastHit.blockZ();
+                // Protect bottom bedrock layer at y=0 in physics mode
+                if (by > 0 || player.isSpectatorMode()) {
+                    world.setBlockAtInteractive(bx, by, bz, (short) 0);
+                    blockActionCooldown = BLOCK_ACTION_REPEAT_SEC;
+                    currentRaycastHit = VoxelRaycaster.raycast(world, eyePos, lookDir, REACH_DISTANCE);
+                    voxelRenderer.setSelectedBlockHit(cinematicMode ? null : currentRaycastHit);
+                }
+            } else if (rightClick) {
+                int ax = currentRaycastHit.adjacentX();
+                int ay = currentRaycastHit.adjacentY();
+                int az = currentRaycastHit.adjacentZ();
+                if (ay >= 0 && ay < Chunk.HEIGHT && world.getBlockAt(ax, ay, az).getId() == 0) {
+                    AABB blockBox = new AABB(
+                            ax + 0.002f, ay + 0.002f, az + 0.002f,
+                            ax + 0.998f, ay + 0.998f, az + 0.998f
+                    );
+                    if (player.isSpectatorMode() || !blockBox.intersects(player.getAABB())) {
+                        world.setBlockAtInteractive(ax, ay, az, player.getSelectedBlockId());
+                        blockActionCooldown = BLOCK_ACTION_REPEAT_SEC;
+                        currentRaycastHit = VoxelRaycaster.raycast(world, eyePos, lookDir, REACH_DISTANCE);
+                        voxelRenderer.setSelectedBlockHit(cinematicMode ? null : currentRaycastHit);
+                    }
+                }
+            }
         }
 
         // Screenshot (F2)
@@ -349,7 +450,17 @@ public class Game {
     }
 
     private void renderUI(RenderContext context) {
+        if (cinematicMode || GameConfig.TEST_HARNESS_ENABLED) {
+            return;
+        }
+
         Matrix4f ortho = new Matrix4f().ortho2D(0, winWidth, winHeight, 0);
+
+        // 1. Center Crosshair
+        renderCrosshair(ortho);
+
+        // 2. Bottom 9-Slot Block Hotbar
+        renderHotbar(ortho);
 
         float textScale = 2.0f;
         if (debugHudVisible) {
@@ -362,10 +473,19 @@ public class Game {
                     context.getCelestialState().activeLight(), context.getCelestialState().activeElevation());
 
             Vector3f pos = player.getPosition();
+            String modeStr = player.isSpectatorMode()
+                    ? "Spectator (Flight)"
+                    : ("Physics (" + (player.getPhysics().isOnGround() ? "OnGround" : "Air")
+                        + (player.isSneaking() ? ", Sneak" : (player.isSprinting() ? ", Sprint" : "")) + ")");
+            String targetStr = currentRaycastHit != null
+                    ? String.format(java.util.Locale.ROOT, "Target: %s (%d, %d, %d)",
+                            currentRaycastHit.block().getName(),
+                            currentRaycastHit.blockX(), currentRaycastHit.blockY(), currentRaycastHit.blockZ())
+                    : "Target: none";
             String[] lines = {
-                "World: " + world.getWorldName(),
+                "World: " + world.getWorldName() + "  |  Mode [P]: " + modeStr,
                 String.format(java.util.Locale.ROOT, "XYZ: %.3f / %.3f / %.3f", pos.x, pos.y, pos.z),
-                String.format(java.util.Locale.ROOT, "Yaw: %.3f deg  Pitch: %.3f deg", player.getYaw(), player.getPitch()),
+                String.format(java.util.Locale.ROOT, "Yaw: %.3f deg  Pitch: %.3f deg  |  %s", player.getYaw(), player.getPitch(), targetStr),
                 String.format(java.util.Locale.ROOT, "Casters: %d/%d extra  Reach: %.0f  %s%s",
                         world.getCasterReady(),world.getCasterRequested(),world.getCasterPlan().reach(),
                         world.getCasterPlan().reachLimited()?"RANGE LIMIT ":"",
@@ -402,7 +522,7 @@ public class Game {
         if (debugNotificationText != null && System.currentTimeMillis() < debugNotificationEndTime) {
             float textWidth = debugNotificationText.length() * 10 * textScale;
             float centerX = (winWidth - textWidth) / 2;
-            float bottomY = winHeight - 40;
+            float bottomY = winHeight - 115;
 
             textRenderer.drawText(
                     debugNotificationText, centerX, bottomY,
@@ -411,6 +531,81 @@ public class Game {
             );
         } else if (debugNotificationText != null && System.currentTimeMillis() >= debugNotificationEndTime) {
             debugNotificationText = null;
+        }
+    }
+
+    private void renderCrosshair(Matrix4f ortho) {
+        float cx = winWidth * 0.5f;
+        float cy = winHeight * 0.5f;
+        float armLen = 10.0f;
+        float thickness = 2.0f;
+
+        Vector4f shadow = new Vector4f(0.05f, 0.05f, 0.08f, 0.75f);
+        Vector4f bright = new Vector4f(0.95f, 0.97f, 1.0f, 0.92f);
+
+        // Dark outline backing for readability on bright sky/snow/sand
+        hudRenderer.drawRect(cx - armLen - 1f, cy - thickness * 0.5f - 1f, armLen * 2f + 2f, thickness + 2f, shadow, ortho);
+        hudRenderer.drawRect(cx - thickness * 0.5f - 1f, cy - armLen - 1f, thickness + 2f, armLen * 2f + 2f, shadow, ortho);
+
+        // Crisp white center cross
+        hudRenderer.drawRect(cx - armLen, cy - thickness * 0.5f, armLen * 2f, thickness, bright, ortho);
+        hudRenderer.drawRect(cx - thickness * 0.5f, cy - armLen, thickness, armLen * 2f, bright, ortho);
+    }
+
+    private void renderHotbar(Matrix4f ortho) {
+        short[] slots = player.getHotbarBlocks();
+        int selected = player.getSelectedHotbarSlot();
+        int count = slots.length;
+
+        float slotSize = 54.0f;
+        float spacing = 6.0f;
+        float totalWidth = count * slotSize + (count - 1) * spacing;
+        float startX = (winWidth - totalWidth) * 0.5f;
+        float y = winHeight - slotSize - 18.0f;
+
+        // Outer translucent bar backing
+        hudRenderer.drawRectWithBorder(
+                startX - 8f, y - 8f,
+                totalWidth + 16f, slotSize + 16f,
+                new Vector4f(0.08f, 0.09f, 0.12f, 0.72f),
+                new Vector4f(0.26f, 0.29f, 0.35f, 0.85f),
+                2.0f, ortho
+        );
+
+        int atlasTex = voxelRenderer.getAtlasTextureId();
+        for (int i = 0; i < count; i++) {
+            float sx = startX + i * (slotSize + spacing);
+            boolean isSelected = (i == selected);
+
+            Vector4f slotFill = isSelected
+                    ? new Vector4f(0.26f, 0.29f, 0.36f, 0.92f)
+                    : new Vector4f(0.14f, 0.16f, 0.20f, 0.85f);
+            Vector4f slotBorder = isSelected
+                    ? new Vector4f(1.0f, 0.86f, 0.32f, 1.0f)
+                    : new Vector4f(0.38f, 0.42f, 0.48f, 0.85f);
+            float borderWidth = isSelected ? 3.0f : 1.5f;
+
+            hudRenderer.drawRectWithBorder(sx, y, slotSize, slotSize, slotFill, slotBorder, borderWidth, ortho);
+
+            Block block = BlockRegistry.getBlock(slots[i]);
+            if (block != null && block.getId() != 0 && atlasTex != 0) {
+                TextureCoords tc = block.getSideTexture();
+                float iconPad = 9.0f;
+                hudRenderer.drawTextureRegion(
+                        sx + iconPad, y + iconPad,
+                        slotSize - iconPad * 2f, slotSize - iconPad * 2f,
+                        atlasTex,
+                        tc.getUMin(), tc.getVMin(), tc.getUMax(), tc.getVMax(),
+                        new Vector4f(1f, 1f, 1f, 1f),
+                        ortho
+                );
+            }
+        }
+    }
+
+    public void cleanup() {
+        if (hudRenderer != null) {
+            hudRenderer.cleanup();
         }
     }
 
